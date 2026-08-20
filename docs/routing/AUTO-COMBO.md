@@ -1,7 +1,7 @@
 ---
 title: "OmniRoute Auto-Combo Engine"
-version: 3.8.40
-lastUpdated: 2026-06-28
+version: 3.8.50
+lastUpdated: 2026-08-19
 ---
 
 # OmniRoute Auto-Combo Engine
@@ -161,30 +161,115 @@ The detection helper lives in `src/lib/combos/modelNameCollision.ts`.
 
 ## How It Works (Persisted Auto-Combos)
 
-The Auto-Combo Engine dynamically selects the best provider/model for each request using a **14-factor scoring function** (defined in `open-sse/services/autoCombo/scoring.ts` → `DEFAULT_WEIGHTS`). Weights form a normalized distribution (custom weights are renormalized by `normalizeScoringWeights()`).
+The Auto-Combo Engine dynamically selects the best provider/model for each request using **14
+baseline factors plus 2 optional adaptive-role factors** (defined in
+`open-sse/services/autoCombo/scoring.ts` → `DEFAULT_WEIGHTS`). Weights form a normalized
+distribution (custom weights are renormalized by `normalizeScoringWeights()`).
 
 ![Auto-Combo 14-factor scoring](../diagrams/exported/auto-combo-12factor.svg)
 
-> Source: [diagrams/auto-combo-12factor.mmd](../diagrams/auto-combo-12factor.mmd) (regenerate via `npm run docs:render-diagrams`). The filename predates the current factor set; the diagram shows 13 of the 14 factors (missing `sessionAvailability`).
+> Source: [diagrams/auto-combo-12factor.mmd](../diagrams/auto-combo-12factor.mmd) (regenerate via `npm run docs:render-diagrams`). The filename predates the current factor set; the diagram covers the baseline scoring flow but not every current factor.
 
-| Factor                | Default Weight | Description                                                                                                                                                                                 |
-| :-------------------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `health`              | 0.20           | Health score from circuit breaker (CLOSED=1.0, HALF_OPEN=0.5, OPEN=0.0)                                                                                                                     |
-| `quota`               | 0.15           | Remaining quota / rate-limit headroom [0..1]                                                                                                                                                |
-| `costInv`             | 0.15           | Inverse **blended** cost (60% input + 40% output token price, normalized) — cheaper = higher score                                                                                          |
-| `latencyInv`          | 0.12           | Inverse p95 latency normalized to pool — faster = higher score                                                                                                                              |
-| `taskFit`             | 0.08           | Task-type fitness (coding, review, planning, analysis, debugging, docs)                                                                                                                     |
-| `stability`           | 0.05           | Variance-based stability (low latency stdDev / error rate)                                                                                                                                  |
-| `tierPriority`        | 0.05           | Account-tier priority — Ultra=1.0, Pro=0.67, Standard=0.33, Free=0.0                                                                                                                        |
-| `tierAffinity`        | 0.05           | Affinity between the candidate's tier and the manifest-recommended tier                                                                                                                     |
-| `specificityMatch`    | 0.05           | Match between request specificity (manifest hint) and model tier                                                                                                                            |
-| `contextAffinity`     | 0.05           | Affinity between the request's context-window need and the model's context window                                                                                                           |
-| `sessionAvailability` | 0.05           | OAuth session availability of the candidate connection for this session (`getOAuthSessionAvailability()`; non-OAuth connections score 1.0)                                                  |
-| `connectionDensity`   | 0.05           | Spreads load across connections of the same provider (anti-concentration)                                                                                                                   |
-| `cacheAffinity`       | 0.00           | Rendezvous-hash affinity toward the connection likeliest to already hold this request's prompt-cache prefix (`open-sse/services/combo/promptCacheAffinity.ts`); disabled by default (#8008) |
-| `resetWindowAffinity` | 0.00           | Bias toward connections whose quota reset window is favorable (disabled by default)                                                                                                         |
+| Factor                           | Default Weight | Description                                                                                                                                                                                 |
+| :------------------------------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `health`                         | 0.1905         | Health score from circuit breaker (CLOSED=1.0, HALF_OPEN=0.5, OPEN=0.0)                                                                                                                     |
+| `quota`                          | 0.1429         | Remaining quota / rate-limit headroom [0..1]                                                                                                                                                |
+| `costInv`                        | 0.1429         | Inverse **blended** cost (60% input + 40% output token price, normalized) — cheaper = higher score                                                                                          |
+| `latencyInv`                     | 0.1143         | Inverse p95 latency normalized to pool — faster = higher score                                                                                                                              |
+| `taskFit`                        | 0.0762         | Task-type fitness (coding, review, planning, analysis, debugging, docs)                                                                                                                     |
+| `stability`                      | 0.0476         | Variance-based stability (low latency stdDev / error rate)                                                                                                                                  |
+| `tierPriority`                   | 0.0476         | Account-tier priority — Ultra=1.0, Pro=0.67, Standard=0.33, Free=0.0                                                                                                                        |
+| `tierAffinity`                   | 0.0476         | Affinity between the candidate's tier and the manifest-recommended tier                                                                                                                     |
+| `specificityMatch`               | 0.0476         | Match between request specificity (manifest hint) and model tier                                                                                                                            |
+| `contextAffinity`                | 0.0476         | Affinity between the request's context-window need and the model's context window                                                                                                           |
+| `sessionAvailability`            | 0.0476         | OAuth session availability of the candidate connection for this session (`getOAuthSessionAvailability()`; non-OAuth connections score 1.0)                                                  |
+| `connectionDensity`              | 0.0476         | Spreads load across connections of the same provider (anti-concentration)                                                                                                                   |
+| `cacheAffinity`                  | 0.00           | Rendezvous-hash affinity toward the connection likeliest to already hold this request's prompt-cache prefix (`open-sse/services/combo/promptCacheAffinity.ts`); disabled by default (#8008) |
+| `resetWindowAffinity`            | 0.00           | Bias toward connections whose quota reset window is favorable (disabled by default)                                                                                                         |
+| `fastWorkerPoolSuitability`      | 0.00           | Request-aware membership in the configured Fast Worker Step pool; activated only for a Fast Worker preference                                                                               |
+| `strongReasoningPoolSuitability` | 0.00           | Request-aware membership in the configured Strong Reasoning Step pool; activated only for a Strong Reasoning preference                                                                     |
 
-**Sum:** `0.20 + 0.15 + 0.15 + 0.12 + 0.08 + 0.05 + 0.05 + 0.05 + 0.05 + 0.05 + 0.05 + 0.05 + 0.00 + 0.00 = 1.05` as literally declared in `DEFAULT_WEIGHTS`; user-configured weights are renormalized into a distribution by `normalizeScoringWeights()` before scoring.
+**Default sum:** `1.0000`. The adaptive factors start at zero. When a request prefers a configured
+role, `activateAdaptiveRoleWeight()` scales the baseline distribution and reserves 0.12–0.20 for
+that role, keeping the final distribution normalized.
+
+## Adaptive Model Roles
+
+Persisted `auto` Combos can assign stable model Step IDs to two optional role pools:
+
+```json
+{
+  "name": "adaptive-production",
+  "strategy": "auto",
+  "models": [
+    { "id": "fast-step", "kind": "model", "provider": "openai", "model": "gpt-4o-mini" },
+    { "id": "strong-step", "kind": "model", "provider": "anthropic", "model": "claude-sonnet-4-5" }
+  ],
+  "config": {
+    "modePack": "quality-first",
+    "fastWorkerModelRefs": ["fast-step"],
+    "strongReasoningModelRefs": ["strong-step"],
+    "adaptiveJudgeModelRef": "fast-step"
+  }
+}
+```
+
+The existing multilingual intent classifier supplies the base intent. Simple requests prefer Fast
+Worker, while math, reasoning, explicit required/named tool selection, and an extracted current-user
+request of at least 2,000 estimated tokens prefer Strong Reasoning. Coding requests are split by the
+actual request: routine formatting, renaming, lookup, or test-running work prefers Fast Worker;
+debugging, architecture, refactoring, migrations, and repository-wide work prefers Strong
+Reasoning; ambiguous coding remains neutral. Medium and creative requests also stay neutral unless
+a complexity signal is present. Rules classification is synchronous and performs no I/O or model
+call.
+
+`adaptiveJudgeModelRef` optionally enables an AI classification call before role selection. It is
+a single stable Step ID, and create/update normalization accepts it only when it points to a model
+Step in the same Combo. The Builder therefore exposes a single-select containing only that Combo's
+models. The judge receives the extracted current user request without the client's tools or prior
+conversation and must return exactly **FAST_WORKER** or **STRONG_REASONING**. It is called only when
+the deterministic classifier remains neutral; deterministic Fast Worker and Strong Reasoning
+decisions bypass the judge. An HTTP error, timeout, missing/stale Step, or invalid verdict leaves the
+request neutral and never blocks the user's main request. Successful decisions are cached for one
+hour by Combo, judge execution target, and extracted prompt, with a 1,000-entry process-local bound,
+so repeated automation turns do not repeatedly invoke the judge.
+The internal judge call is non-streaming, is excluded from Context Relay/session-affinity tracking,
+and still passes through normal provider authentication, circuit breakers, and request sanitization.
+A judge Step that is not also selected in Fast Worker or Strong Reasoning is judge-only: it is
+excluded from scoring, continuity/affinity reordering, final responses, and the worker fallback tail.
+Selecting the same Step in a worker role explicitly allows it to serve both roles.
+
+Intent is derived from the current human request, not client metadata. Ordinary chat content is used
+as-is; IDE envelopes with tags such as `<userRequest>`/`<user_request>` are reduced to the last
+explicit request while environment, workspace, editor, memory, and reminder blocks are ignored.
+System prompts and merely available tool schemas do not promote a request. An explicit tool choice
+is ignored on an assistant/tool continuation because it describes the ongoing automation protocol,
+not a new complexity request. Long-input promotion uses the extracted current request rather than
+accumulated conversation history.
+
+Role membership is resolved only after ordinary eligibility filtering. It cannot restore a target
+excluded by capability, context, quota, connection cooldown, model lockout, or circuit-breaker
+rules. For the standard rules router, primary scoring and epsilon exploration are scoped to the
+preferred role whenever that pool has a routable candidate; exploration therefore cannot send a
+Simple request to Strong Reasoning. Once Auto selects its primary, the legacy task-aware and
+prompt-cache-affinity stages may reorder only the fallback tail; neither may replace that primary.
+The finite execution fallback remains preferred role, alternate role, then unassigned/ordinary
+targets, deduplicated by execution identity. If the preferred role pool is empty, all non-judge
+model Steps become the general worker pool and are scored using that role's Advanced profile.
+Legacy `task-route` may reorder this general fallback tail, but it cannot replace the primary that
+Auto selected. A Combo containing only a judge-only Step has no executable worker target.
+
+The Builder's Advanced section supports independent `fastWorkerWeights` and
+`strongReasoningWeights` profiles. Selection stays inside the preferred eligible role pool when
+that pool is populated:
+
+- one eligible role member is selected directly;
+- two or more role members are ranked with that role's custom profile;
+- an unset role profile inherits the default weights or active Mode Pack;
+- the remaining preferred-role members stay ahead of alternate-role and unassigned fallbacks.
+- when that role has no assigned members, its profile ranks the general worker pool instead.
+
+An explicit per-request mode override remains authoritative over persisted role profiles.
 
 ## Mode Packs
 
@@ -655,7 +740,7 @@ Including the bare `auto` (default) plus the 6 `AutoVariant` values declared in 
 
 ## How tiers fit Auto-Combo
 
-The 14-factor scoring function (`open-sse/services/autoCombo/scoring.ts`) treats tier
+The baseline scoring function (`open-sse/services/autoCombo/scoring.ts`) treats tier
 membership as two signals: `tierPriority` (0.05) and `tierAffinity` (0.05). See the
 canonical [scoring factor table](#how-it-works-persisted-auto-combos) above for the full
 `DEFAULT_WEIGHTS` set — the per-pack overrides (ship-fast/cost-saver/quality-first/
@@ -693,6 +778,15 @@ Coverage includes:
 This suite runs in CI (`test:integration` job) with `--test-concurrency=1` and
 `--test-force-exit` so it is deterministic and does not require live credentials.
 
+Adaptive routing adds three focused regression layers:
+
+- `tests/integration/adaptive-routing-roles.test.ts` exercises real Combo create/list/update APIs,
+  stable role references, overlap, and stale-reference pruning.
+- `tests/e2e/combo-unification.spec.ts` drives the Builder through two Step assignments and verifies
+  the saved Fast Worker and Strong Reasoning references.
+- `tests/integration/adaptive-routing-performance.test.ts` benchmarks classification plus scoring
+  20 candidates over 20,000 requests and enforces an average below 1 ms per request.
+
 ### Gated live smoke (NOT in CI — real providers)
 
 | Command                                | What it does                                                                   |
@@ -710,7 +804,8 @@ intentionally excluded from CI because they require live credentials and VPS acc
 
 | File                                                      | Purpose                                                                    |
 | :-------------------------------------------------------- | :------------------------------------------------------------------------- |
-| `open-sse/services/autoCombo/scoring.ts`                  | 9-factor scoring function, `DEFAULT_WEIGHTS`, pool norm                    |
+| `open-sse/services/autoCombo/scoring.ts`                  | Baseline and adaptive-role scoring, `DEFAULT_WEIGHTS`, normalization       |
+| `open-sse/services/autoCombo/taskClassification.ts`       | Deterministic request complexity and preferred-role classification         |
 | `open-sse/services/autoCombo/taskFitness.ts`              | Model × task fitness lookup                                                |
 | `open-sse/services/autoCombo/engine.ts`                   | Selection logic, bandit, budget cap                                        |
 | `open-sse/services/autoCombo/selfHealing.ts`              | Exclusion, probes, incident mode                                           |
@@ -718,5 +813,6 @@ intentionally excluded from CI because they require live credentials and VPS acc
 | `open-sse/services/autoCombo/autoPrefix.ts`               | `auto/` prefix parser + 6 variants                                         |
 | `open-sse/services/autoCombo/virtualFactory.ts`           | Builds in-memory `AutoComboConfig` from live connections                   |
 | `open-sse/services/autoCombo/providerRegistryAccessor.ts` | Test hook for mocking provider registry                                    |
+| `open-sse/services/combo/rolePools.ts`                    | Stable Step-ID role resolution and finite role-aware fallback order        |
 | `src/shared/constants/routingStrategies.ts`               | `ROUTING_STRATEGY_VALUES` (19 strategies)                                  |
 | `src/sse/handlers/chat.ts`                                | Integration: auto-prefix short-circuit                                     |

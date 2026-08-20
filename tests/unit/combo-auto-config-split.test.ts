@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { parseAutoConfig } from "@omniroute/open-sse/services/combo/autoConfig.ts";
-import { DEFAULT_WEIGHTS, normalizeScoringWeights } from "@omniroute/open-sse/services/autoCombo/scoring.ts";
+import {
+  DEFAULT_WEIGHTS,
+  normalizeScoringWeights,
+} from "@omniroute/open-sse/services/autoCombo/scoring.ts";
 import { MODE_PACKS } from "@omniroute/open-sse/services/autoCombo/modePacks.ts";
 
 // Split guard for Block J Task 2: parseAutoConfig was extracted verbatim from
@@ -90,6 +93,24 @@ test("valid modePack overrides configured weights for fallback scoring", () => {
 
   assert.equal(cfg.modePack, "ship-fast");
   assert.deepEqual(cfg.weights, normalizeScoringWeights(MODE_PACKS["ship-fast"]));
+});
+
+test("normalizes optional Fast Worker and Strong Reasoning weight profiles", () => {
+  const fastWorkerWeights = { ...DEFAULT_WEIGHTS, costInv: 1, latencyInv: 0 };
+  const strongReasoningWeights = { ...DEFAULT_WEIGHTS, taskFit: 1, costInv: 0 };
+  const cfg = parseAutoConfig(
+    {
+      name: "role-weights",
+      autoConfig: { fastWorkerWeights, strongReasoningWeights },
+    } as never,
+    []
+  );
+
+  assert.deepEqual(cfg.roleWeights.fastWorker, normalizeScoringWeights(fastWorkerWeights));
+  assert.deepEqual(
+    cfg.roleWeights.strongReasoning,
+    normalizeScoringWeights(strongReasoningWeights)
+  );
 });
 
 test("config.auto is preferred over top-level config", () => {

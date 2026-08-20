@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
-import {
-  getCombos,
-  getCombosCount,
-  createCombo,
-  getComboByName,
-  isCloudEnabled,
-} from "@/lib/localDb";
+import { createCombo, getComboByName, getCombos, getCombosCount } from "@/lib/db/combos";
+import { isCloudEnabled } from "@/lib/db/settings";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
 import { validateCompositeTiersConfig } from "@/lib/combos/compositeTiers";
@@ -16,6 +11,7 @@ import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { computeComboContextLength } from "@/lib/combos/comboContext";
+import { normalizeIntelligentRolePoolConfig } from "@/lib/combos/intelligentRouting";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
 
@@ -74,6 +70,11 @@ export async function POST(request) {
     const comboInput = {
       ...validation.data,
       models: normalizedModels,
+      ...(validation.data.config
+        ? {
+            config: normalizeIntelligentRolePoolConfig(validation.data.config, normalizedModels),
+          }
+        : {}),
     };
     const { name, strategy, config } = comboInput;
     const compositeValidation = validateCompositeTiersConfig(comboInput);

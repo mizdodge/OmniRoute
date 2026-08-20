@@ -139,8 +139,8 @@ test("BUG #8370: priority combo keeps its declared model-1-first order despite c
   );
 });
 
-test("shouldProtectOriginalFirst covers priority, fill-first, and lkgp", () => {
-  for (const strategy of ["priority", "fill-first", "lkgp"]) {
+test("shouldProtectOriginalFirst covers priority, fill-first, lkgp, and auto", () => {
+  for (const strategy of ["priority", "fill-first", "lkgp", "auto"]) {
     assert.equal(
       shouldProtectOriginalFirst(false, false, strategy),
       true,

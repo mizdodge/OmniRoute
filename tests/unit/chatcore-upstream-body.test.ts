@@ -50,6 +50,33 @@ test("leaves the model untouched when it already matches", async () => {
   assert.equal(out.model, "model-a");
 });
 
+test("strips OmniRoute context-handoff controls before upstream dispatch", async () => {
+  const translatedBody = {
+    model: "nvidia/nemotron-3.5-lightning-30b-a3b",
+    messages: [{ role: "user", content: "Summarize the handoff" }],
+    _omnirouteSkipContextRelay: true,
+    _omnirouteInternalRequest: "context-handoff",
+    metadata: { trace: "keep-me" },
+  };
+
+  const out = await prepareUpstreamBody({
+    translatedBody,
+    modelToCall: "nvidia/nemotron-3.5-lightning-30b-a3b",
+    provider: "nvidia",
+    targetFormat: FORMATS.OPENAI,
+    credentials: null,
+  });
+
+  assert.equal(out._omnirouteSkipContextRelay, undefined);
+  assert.equal(out._omnirouteInternalRequest, undefined);
+  assert.deepEqual(out.metadata, { trace: "keep-me" });
+  assert.equal(
+    translatedBody._omnirouteInternalRequest,
+    "context-handoff",
+    "internal caller body remains available to local routing logic"
+  );
+});
+
 test("defaults OpenAI image inputs to high detail for OpenCode clients without overriding explicit detail", async () => {
   const out = await prepareUpstreamBody({
     translatedBody: {

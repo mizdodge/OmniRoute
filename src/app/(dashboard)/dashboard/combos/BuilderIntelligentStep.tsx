@@ -7,13 +7,22 @@ import {
   FACTOR_LABELS,
   MODE_PACK_OPTIONS,
   ROUTER_STRATEGY_OPTIONS,
+  type IntelligentRoutingWeights,
+  type IntelligentRoleModelOption,
+  type IntelligentRolePoolKey,
   normalizeIntelligentRoutingConfig,
+  toggleIntelligentRoleModelRef,
 } from "@/lib/combos/intelligentRouting";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { compareTr } from "@/shared/utils/turkishText";
 
-function getI18nOrFallback(t: any, key: string, fallback: string) {
-  if (typeof t?.has === "function" && t.has(key)) return t(key);
+function getI18nOrFallback(
+  t: any,
+  key: string,
+  fallback: string,
+  values?: Record<string, string | number>
+) {
+  if (typeof t?.has === "function" && t.has(key)) return t(key, values);
   return fallback;
 }
 
@@ -66,16 +75,161 @@ function toProviderOptions(activeProviders: any[] = [], candidatePool: string[] 
   return [...uniqueProviders.values()].sort((a, b) => compareTr(a.label, b.label));
 }
 
+function RolePoolSelector({
+  t,
+  field,
+  title,
+  hint,
+  options,
+  selectedRefs,
+  onToggle,
+}: {
+  t: any;
+  field: IntelligentRolePoolKey;
+  title: string;
+  hint: string;
+  options: IntelligentRoleModelOption[];
+  selectedRefs: string[];
+  onToggle: (field: IntelligentRolePoolKey, stepId: string) => void;
+}) {
+  const availableIds = new Set(options.map((option) => option.stepId));
+  const selectedCount = selectedRefs.filter((ref) => availableIds.has(ref)).length;
+  const staleCount = selectedRefs.length - selectedCount;
+
+  return (
+    <Card.Section>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-text-main">{title}</p>
+          <p className="text-[11px] text-text-muted mt-1">{hint}</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">
+          {getI18nOrFallback(t, "rolePoolSelectedCount", "{count} selected", {
+            count: selectedCount,
+          }).replace("{count}", String(selectedCount))}
+        </span>
+      </div>
+
+      {options.length === 0 ? (
+        <p className="mt-3 rounded-md border border-dashed border-black/10 dark:border-white/10 px-3 py-2 text-[11px] text-text-muted">
+          {getI18nOrFallback(
+            t,
+            "rolePoolNoModels",
+            "Add model Steps before assigning Smart Routing roles."
+          )}
+        </p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2" role="group" aria-label={title}>
+          {options.map((option) => {
+            const isSelected = selectedRefs.includes(option.stepId);
+            const connectionText = option.connectionId
+              ? option.connectionLabel || option.connectionId
+              : getI18nOrFallback(t, "rolePoolAutoConnection", "Automatic connection");
+
+            return (
+              <button
+                key={`${field}-${option.stepId}`}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => onToggle(field, option.stepId)}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
+                  isSelected
+                    ? "border-primary bg-primary/10"
+                    : "border-black/10 dark:border-white/10 hover:border-primary/40 hover:bg-primary/5"
+                }`}
+              >
+                <span
+                  className={`material-symbols-outlined text-[18px] ${
+                    isSelected ? "text-primary" : "text-text-muted"
+                  }`}
+                >
+                  {isSelected ? "check_circle" : "radio_button_unchecked"}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-text-main">
+                    {option.model}
+                  </span>
+                  <span className="block truncate text-[10px] text-text-muted">
+                    {connectionText}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {staleCount > 0 && (
+        <p className="mt-2 text-[10px] text-amber-700 dark:text-amber-300">
+          {getI18nOrFallback(
+            t,
+            "rolePoolStaleRefs",
+            "{count} unavailable selection(s) will be removed when this Combo is saved.",
+            { count: staleCount }
+          ).replace("{count}", String(staleCount))}
+        </p>
+      )}
+    </Card.Section>
+  );
+}
+
+function WeightSliders({
+  t,
+  weights,
+  onChange,
+}: {
+  t: any;
+  weights: IntelligentRoutingWeights;
+  onChange: (weightKey: keyof IntelligentRoutingWeights, value: number) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+      {Object.entries(weights).map(([weightKey, weightValue]) => (
+        <div key={weightKey} className="rounded-lg border border-black/6 dark:border-white/6 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-[11px] font-medium text-text-main">
+              {getI18nOrFallback(
+                t,
+                `weight${weightKey[0].toUpperCase()}${weightKey.slice(1)}`,
+                FACTOR_LABELS[weightKey as keyof typeof DEFAULT_INTELLIGENT_WEIGHTS]
+              )}
+            </label>
+            <span className="text-[11px] text-text-muted">
+              {Math.round(Number(weightValue) * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={weightValue}
+            onChange={(event) =>
+              onChange(
+                weightKey as keyof IntelligentRoutingWeights,
+                Number(event.target.value || 0)
+              )
+            }
+            className="mt-3 w-full accent-primary"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function BuilderIntelligentStep({
   t,
   config,
   onChange,
   activeProviders,
+  modelOptions,
 }: {
   t: any;
   config: Record<string, unknown>;
   onChange: (nextConfig: Record<string, unknown>) => void;
   activeProviders: any[];
+  modelOptions: IntelligentRoleModelOption[];
 }) {
   const normalizedConfig = normalizeIntelligentRoutingConfig(config);
   const isSlaAwareStrategy = ["sla-aware", "sla"].includes(normalizedConfig.routerStrategy);
@@ -95,12 +249,54 @@ export default function BuilderIntelligentStep({
     });
   };
 
+  const updateRoleWeight = (
+    field: "fastWorkerWeights" | "strongReasoningWeights",
+    weightKey: keyof IntelligentRoutingWeights,
+    value: number
+  ) => {
+    updateConfig({
+      [field]: {
+        ...(normalizedConfig[field] || normalizedConfig.weights),
+        [weightKey]: value,
+      },
+    });
+  };
+
+  const setRoleWeightCustomization = (
+    field: "fastWorkerWeights" | "strongReasoningWeights",
+    enabled: boolean
+  ) => {
+    if (enabled) {
+      updateConfig({ [field]: { ...normalizedConfig.weights } });
+      return;
+    }
+    const nextConfig = { ...normalizedConfig } as Record<string, unknown>;
+    delete nextConfig[field];
+    onChange(nextConfig);
+  };
+
   const toggleCandidateProvider = (providerId: string) => {
     const nextCandidatePool = normalizedConfig.candidatePool.includes(providerId)
       ? normalizedConfig.candidatePool.filter((entry) => entry !== providerId)
       : [...normalizedConfig.candidatePool, providerId];
 
     updateConfig({ candidatePool: nextCandidatePool });
+  };
+
+  const toggleRoleModel = (field: IntelligentRolePoolKey, stepId: string) => {
+    const nextRefs = toggleIntelligentRoleModelRef(
+      normalizedConfig[field],
+      stepId,
+      modelOptions.map((option) => option.stepId)
+    );
+    updateConfig({ [field]: nextRefs });
+  };
+
+  const setAdaptiveJudgeModel = (stepId: string) => {
+    const nextConfig = { ...normalizedConfig } as Record<string, unknown>;
+    if (stepId) nextConfig.adaptiveJudgeModelRef = stepId;
+    else delete nextConfig.adaptiveJudgeModelRef;
+    onChange(nextConfig);
   };
 
   return (
@@ -177,6 +373,77 @@ export default function BuilderIntelligentStep({
           })}
         </div>
       </Card.Section>
+
+      <div>
+        <div className="mb-2">
+          <p className="text-xs font-semibold text-text-main">
+            {getI18nOrFallback(t, "rolePoolsTitle", "Adaptive Model Roles")}
+          </p>
+          <p className="text-[11px] text-text-muted mt-1">
+            {getI18nOrFallback(
+              t,
+              "rolePoolsHint",
+              "Assign one or more existing model Steps to each role. A model may belong to both pools."
+            )}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <RolePoolSelector
+            t={t}
+            field="fastWorkerModelRefs"
+            title={getI18nOrFallback(t, "fastWorkerPoolLabel", "Fast Worker Pool")}
+            hint={getI18nOrFallback(
+              t,
+              "fastWorkerPoolHint",
+              "Models intended for fast, low-complexity, or high-volume work."
+            )}
+            options={modelOptions}
+            selectedRefs={normalizedConfig.fastWorkerModelRefs || []}
+            onToggle={toggleRoleModel}
+          />
+          <RolePoolSelector
+            t={t}
+            field="strongReasoningModelRefs"
+            title={getI18nOrFallback(t, "strongReasoningPoolLabel", "Strong Reasoning Pool")}
+            hint={getI18nOrFallback(
+              t,
+              "strongReasoningPoolHint",
+              "Models intended for difficult reasoning, planning, debugging, or architecture work."
+            )}
+            options={modelOptions}
+            selectedRefs={normalizedConfig.strongReasoningModelRefs || []}
+            onToggle={toggleRoleModel}
+          />
+        </div>
+        <Card.Section className="mt-3">
+          <label className="text-xs font-semibold text-text-main block mb-2">
+            {getI18nOrFallback(t, "adaptiveJudgeLabel", "AI Intent Classifier")}
+          </label>
+          <select
+            aria-label={getI18nOrFallback(t, "adaptiveJudgeLabel", "AI Intent Classifier")}
+            value={normalizedConfig.adaptiveJudgeModelRef || ""}
+            onChange={(event) => setAdaptiveJudgeModel(event.target.value)}
+            className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-transparent focus:border-primary focus:outline-none"
+          >
+            <option value="">
+              {getI18nOrFallback(t, "adaptiveJudgeDisabled", "Rules only (disabled)")}
+            </option>
+            {modelOptions.map((option) => (
+              <option key={`judge-${option.stepId}`} value={option.stepId}>
+                {option.model}
+                {option.connectionLabel ? ` — ${option.connectionLabel}` : ""}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-[11px] text-text-muted">
+            {getI18nOrFallback(
+              t,
+              "adaptiveJudgeHint",
+              "Choose one model Step from this Combo to classify ambiguous requests as Fast or Strong. Clear decisions and classifier failures use rules."
+            )}
+          </p>
+        </Card.Section>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Card.Section>
@@ -331,7 +598,8 @@ export default function BuilderIntelligentStep({
             {getI18nOrFallback(
               t,
               "explorationRateHint",
-              "{percent}% of requests can explore non-optimal providers."
+              "{percent}% of requests can explore non-optimal providers.",
+              { percent: Math.round(normalizedConfig.explorationRate * 100) }
             ).replace("{percent}", `${Math.round(normalizedConfig.explorationRate * 100)}`)}
           </p>
         </Card.Section>
@@ -360,43 +628,99 @@ export default function BuilderIntelligentStep({
         <summary className="cursor-pointer text-xs font-semibold text-text-main">
           {getI18nOrFallback(t, "advancedWeightsTitle", "Advanced: Scoring Weights")}
         </summary>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-          {Object.entries(normalizedConfig.weights).map(([weightKey, weightValue]) => (
+        <p className="mt-2 text-[11px] text-text-muted">
+          {getI18nOrFallback(
+            t,
+            "advancedWeightsHint",
+            "Default weights handle neutral requests. Role profiles rank models only inside the active worker pool."
+          )}
+        </p>
+
+        <div className="mt-3 rounded-lg border border-black/8 dark:border-white/8 p-3">
+          <p className="text-xs font-semibold text-text-main">
+            {getI18nOrFallback(t, "defaultWeightsLabel", "Default / Neutral Weights")}
+          </p>
+          <WeightSliders
+            t={t}
+            weights={normalizedConfig.weights}
+            onChange={(weightKey, value) =>
+              updateConfig({ weights: { ...normalizedConfig.weights, [weightKey]: value } })
+            }
+          />
+        </div>
+
+        {(
+          [
+            {
+              field: "fastWorkerWeights" as const,
+              title: getI18nOrFallback(t, "fastWorkerWeightsLabel", "Fast Worker Weights"),
+              selectedCount: normalizedConfig.fastWorkerModelRefs?.length || 0,
+            },
+            {
+              field: "strongReasoningWeights" as const,
+              title: getI18nOrFallback(
+                t,
+                "strongReasoningWeightsLabel",
+                "Strong Reasoning Weights"
+              ),
+              selectedCount: normalizedConfig.strongReasoningModelRefs?.length || 0,
+            },
+          ] as const
+        ).map(({ field, title, selectedCount }) => {
+          const customWeights = normalizedConfig[field];
+          const isCustomized = Boolean(customWeights);
+          const selectionHint =
+            selectedCount <= 1
+              ? getI18nOrFallback(
+                  t,
+                  "singleRoleModelWeightHint",
+                  "With one eligible model, it is selected directly. These weights activate when the pool has multiple models."
+                )
+              : getI18nOrFallback(
+                  t,
+                  "multipleRoleModelsWeightHint",
+                  "Ranking {count} models inside this worker pool.",
+                  { count: selectedCount }
+                ).replace("{count}", String(selectedCount));
+
+          return (
             <div
-              key={weightKey}
-              className="rounded-lg border border-black/6 dark:border-white/6 p-3"
+              key={field}
+              className="mt-3 rounded-lg border border-black/8 dark:border-white/8 p-3"
             >
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-[11px] font-medium text-text-main">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-text-main">{title}</p>
+                  <p className="mt-1 text-[11px] text-text-muted">{selectionHint}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRoleWeightCustomization(field, !isCustomized)}
+                  className="shrink-0 rounded-md border border-primary/30 px-2 py-1 text-[10px] font-semibold text-primary hover:bg-primary/10"
+                >
+                  {isCustomized
+                    ? getI18nOrFallback(t, "useDefaultWeights", "Use Default")
+                    : getI18nOrFallback(t, "customizeWeights", "Customize")}
+                </button>
+              </div>
+              {isCustomized ? (
+                <WeightSliders
+                  t={t}
+                  weights={customWeights || normalizedConfig.weights}
+                  onChange={(weightKey, value) => updateRoleWeight(field, weightKey, value)}
+                />
+              ) : (
+                <p className="mt-3 rounded-md bg-black/3 dark:bg-white/3 px-3 py-2 text-[11px] text-text-muted">
                   {getI18nOrFallback(
                     t,
-                    `weight${weightKey[0].toUpperCase()}${weightKey.slice(1)}`,
-                    FACTOR_LABELS[weightKey as keyof typeof DEFAULT_INTELLIGENT_WEIGHTS]
+                    "inheritsDefaultWeights",
+                    "Currently inherits Default / Neutral Weights."
                   )}
-                </label>
-                <span className="text-[11px] text-text-muted">
-                  {Math.round(Number(weightValue) * 100)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={weightValue}
-                onChange={(event) =>
-                  updateConfig({
-                    weights: {
-                      ...normalizedConfig.weights,
-                      [weightKey]: Number(event.target.value || 0),
-                    },
-                  })
-                }
-                className="mt-3 w-full accent-primary"
-              />
+                </p>
+              )}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </details>
     </div>
   );

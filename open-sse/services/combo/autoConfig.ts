@@ -6,6 +6,7 @@ import {
 import { getModePack } from "../autoCombo/modePacks.ts";
 import { isRecord } from "./comboData.ts";
 import { resolveResetWindowConfig, resolveSlaRoutingPolicy } from "./quotaScoring.ts";
+import { resolveAdaptiveJudgeTarget, resolveRolePoolCandidates } from "./rolePools.ts";
 import type { ComboLike, ResolvedComboTarget } from "./types.ts";
 
 /**
@@ -17,7 +18,11 @@ import type { ComboLike, ResolvedComboTarget } from "./types.ts";
  * No side effects, no early returns — extracted verbatim from `handleComboChat`
  * so its behavior is byte-identical to the previous inline block.
  */
-export function parseAutoConfig(combo: ComboLike, eligibleTargets: ResolvedComboTarget[]) {
+export function parseAutoConfig(
+  combo: ComboLike,
+  eligibleTargets: ResolvedComboTarget[],
+  judgeTargets: ResolvedComboTarget[] = eligibleTargets
+) {
   const rawAutoConfigSource =
     combo?.autoConfig ||
     (isRecord(combo?.config?.auto) ? combo.config.auto : null) ||
@@ -60,18 +65,31 @@ export function parseAutoConfig(combo: ComboLike, eligibleTargets: ResolvedCombo
   const weights = normalizeScoringWeights(
     modePack ? getModePack(modePack) || configuredWeights : configuredWeights
   );
+  const roleWeights = {
+    fastWorker: isRecord(autoConfigSource.fastWorkerWeights)
+      ? normalizeScoringWeights(autoConfigSource.fastWorkerWeights as Partial<ScoringWeights>)
+      : undefined,
+    strongReasoning: isRecord(autoConfigSource.strongReasoningWeights)
+      ? normalizeScoringWeights(autoConfigSource.strongReasoningWeights as Partial<ScoringWeights>)
+      : undefined,
+  };
   const resetWindowConfig = resolveResetWindowConfig(autoConfigSource);
   const slaPolicy = resolveSlaRoutingPolicy(autoConfigSource);
+  const rolePools = resolveRolePoolCandidates(autoConfigSource, eligibleTargets);
+  const judgeTarget = resolveAdaptiveJudgeTarget(autoConfigSource, judgeTargets);
 
   return {
     routingStrategy,
     candidatePool,
     weights,
+    roleWeights,
     explorationRate,
     budgetCap,
     budgetFallback,
     modePack,
     resetWindowConfig,
     slaPolicy,
+    rolePools,
+    judgeTarget,
   };
 }

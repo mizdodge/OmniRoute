@@ -23,15 +23,44 @@ export type IntelligentRoutingWeights = {
 
 export type IntelligentRoutingConfig = {
   candidatePool: string[];
+  fastWorkerModelRefs?: string[];
+  strongReasoningModelRefs?: string[];
+  adaptiveJudgeModelRef?: string;
   explorationRate: number;
   modePack: string;
   budgetCap?: number;
   weights: IntelligentRoutingWeights;
+  fastWorkerWeights?: IntelligentRoutingWeights;
+  strongReasoningWeights?: IntelligentRoutingWeights;
   routerStrategy: string;
   slaTargetP95Ms?: number;
   slaMaxErrorRate?: number;
   slaMaxCostPer1MTokens?: number;
   slaHardConstraints: boolean;
+};
+
+export const INTELLIGENT_ROLE_POOL_KEYS = [
+  "fastWorkerModelRefs",
+  "strongReasoningModelRefs",
+] as const;
+
+export type IntelligentRolePoolKey = (typeof INTELLIGENT_ROLE_POOL_KEYS)[number];
+
+type ComboModelStepReference = {
+  id?: unknown;
+  kind?: unknown;
+  model?: unknown;
+  providerId?: unknown;
+  connectionId?: unknown;
+  label?: unknown;
+};
+
+export type IntelligentRoleModelOption = {
+  stepId: string;
+  model: string;
+  providerId: string | null;
+  connectionId: string | null;
+  connectionLabel: string | null;
 };
 
 export type IntelligentProviderScore = {
@@ -102,6 +131,144 @@ function toPositiveNumber(value: unknown): number | undefined {
   return numericValue !== null && numericValue > 0 ? numericValue : undefined;
 }
 
+function normalizeIntelligentWeights(value: unknown): IntelligentRoutingWeights {
+  const rawWeights = isRecord(value) ? value : {};
+  return {
+    quota: toFiniteNumber(rawWeights.quota) ?? DEFAULT_INTELLIGENT_WEIGHTS.quota,
+    health: toFiniteNumber(rawWeights.health) ?? DEFAULT_INTELLIGENT_WEIGHTS.health,
+    costInv: toFiniteNumber(rawWeights.costInv) ?? DEFAULT_INTELLIGENT_WEIGHTS.costInv,
+    latencyInv: toFiniteNumber(rawWeights.latencyInv) ?? DEFAULT_INTELLIGENT_WEIGHTS.latencyInv,
+    taskFit: toFiniteNumber(rawWeights.taskFit) ?? DEFAULT_INTELLIGENT_WEIGHTS.taskFit,
+    stability: toFiniteNumber(rawWeights.stability) ?? DEFAULT_INTELLIGENT_WEIGHTS.stability,
+    tierPriority:
+      toFiniteNumber(rawWeights.tierPriority) ?? DEFAULT_INTELLIGENT_WEIGHTS.tierPriority,
+    tierAffinity:
+      toFiniteNumber(rawWeights.tierAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.tierAffinity,
+    specificityMatch:
+      toFiniteNumber(rawWeights.specificityMatch) ?? DEFAULT_INTELLIGENT_WEIGHTS.specificityMatch,
+    contextAffinity:
+      toFiniteNumber(rawWeights.contextAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.contextAffinity,
+    cacheAffinity:
+      toFiniteNumber(rawWeights.cacheAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.cacheAffinity,
+    sessionAvailability:
+      toFiniteNumber(rawWeights.sessionAvailability) ??
+      DEFAULT_INTELLIGENT_WEIGHTS.sessionAvailability,
+    resetWindowAffinity:
+      toFiniteNumber(rawWeights.resetWindowAffinity) ??
+      DEFAULT_INTELLIGENT_WEIGHTS.resetWindowAffinity,
+  };
+}
+
+function normalizeModelStepRefs(value: unknown, modelSteps?: readonly unknown[]): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const validStepIds = modelSteps
+    ? new Set(
+        modelSteps.flatMap((step) => {
+          if (!isRecord(step) || step.kind !== "model") return [];
+          const id = typeof step.id === "string" ? step.id.trim() : "";
+          return id ? [id] : [];
+        })
+      )
+    : null;
+  const seen = new Set<string>();
+
+  return value.flatMap((entry) => {
+    if (typeof entry !== "string") return [];
+    const ref = entry.trim();
+    if (!ref || seen.has(ref) || (validStepIds && !validStepIds.has(ref))) return [];
+    seen.add(ref);
+    return [ref];
+  });
+}
+
+function normalizeModelStepRef(
+  value: unknown,
+  modelSteps?: readonly unknown[]
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const ref = value.trim();
+  if (!ref) return undefined;
+  if (!modelSteps) return ref;
+  return normalizeModelStepRefs([ref], modelSteps)[0];
+}
+
+/**
+ * Normalize only the role-pool fields while preserving every unrelated runtime
+ * config key. Passing model steps additionally removes stale/non-model refs.
+ */
+export function normalizeIntelligentRolePoolConfig<T extends JsonRecord>(
+  config: T,
+  modelSteps?: readonly ComboModelStepReference[]
+): T {
+  const next = { ...config } as JsonRecord;
+
+  for (const key of INTELLIGENT_ROLE_POOL_KEYS) {
+    if (!(key in config)) continue;
+    next[key] = normalizeModelStepRefs(config[key], modelSteps);
+  }
+
+  if ("adaptiveJudgeModelRef" in config) {
+    const judgeRef = normalizeModelStepRef(config.adaptiveJudgeModelRef, modelSteps);
+    if (judgeRef) next.adaptiveJudgeModelRef = judgeRef;
+    else delete next.adaptiveJudgeModelRef;
+  }
+
+  return next as T;
+}
+
+export function hasIntelligentRolePoolConfig(config: unknown): boolean {
+  return (
+    isRecord(config) &&
+    (INTELLIGENT_ROLE_POOL_KEYS.some((key) => key in config) || "adaptiveJudgeModelRef" in config)
+  );
+}
+
+/** Build role-selector options exclusively from explicit model Steps in this Combo. */
+export function buildIntelligentRoleModelOptions(
+  modelSteps: readonly ComboModelStepReference[]
+): IntelligentRoleModelOption[] {
+  const seen = new Set<string>();
+
+  return modelSteps.flatMap((step) => {
+    if (!isRecord(step) || step.kind !== "model") return [];
+    const stepId = typeof step.id === "string" ? step.id.trim() : "";
+    const model = typeof step.model === "string" ? step.model.trim() : "";
+    if (!stepId || !model || seen.has(stepId)) return [];
+    seen.add(stepId);
+
+    return [
+      {
+        stepId,
+        model,
+        providerId:
+          typeof step.providerId === "string" && step.providerId.trim()
+            ? step.providerId.trim()
+            : null,
+        connectionId:
+          typeof step.connectionId === "string" && step.connectionId.trim()
+            ? step.connectionId.trim()
+            : null,
+        connectionLabel:
+          typeof step.label === "string" && step.label.trim() ? step.label.trim() : null,
+      },
+    ];
+  });
+}
+
+export function toggleIntelligentRoleModelRef(
+  currentRefs: unknown,
+  stepId: string,
+  availableStepIds: readonly string[]
+): string[] {
+  const available = new Set(availableStepIds);
+  const normalizedCurrent = normalizeModelStepRefs(currentRefs).filter((ref) => available.has(ref));
+  if (!available.has(stepId)) return normalizedCurrent;
+  return normalizedCurrent.includes(stepId)
+    ? normalizedCurrent.filter((ref) => ref !== stepId)
+    : [...normalizedCurrent, stepId];
+}
+
 export function isIntelligentStrategy(strategy: unknown): boolean {
   return typeof strategy === "string" && INTELLIGENT_STRATEGIES.includes(strategy as never);
 }
@@ -127,7 +294,7 @@ export function filterCombosByStrategyCategory<T extends { strategy?: unknown }>
 
 export function normalizeIntelligentRoutingConfig(config: unknown): IntelligentRoutingConfig {
   const configRecord = isRecord(config) ? config : {};
-  const rawWeights = isRecord(configRecord.weights) ? configRecord.weights : {};
+  const normalizedRolePools = normalizeIntelligentRolePoolConfig(configRecord);
   const rawSla = isRecord(configRecord.sla) ? configRecord.sla : {};
   const slaTargetP95Ms = configRecord.slaTargetP95Ms ?? rawSla.targetP95Ms;
   const slaMaxErrorRate = toFiniteNumber(configRecord.slaMaxErrorRate ?? rawSla.maxErrorRate);
@@ -138,36 +305,30 @@ export function normalizeIntelligentRoutingConfig(config: unknown): IntelligentR
     candidatePool: Array.isArray(configRecord.candidatePool)
       ? configRecord.candidatePool.filter((value): value is string => typeof value === "string")
       : [],
+    ...(INTELLIGENT_ROLE_POOL_KEYS[0] in configRecord
+      ? { fastWorkerModelRefs: normalizedRolePools.fastWorkerModelRefs as string[] }
+      : {}),
+    ...(INTELLIGENT_ROLE_POOL_KEYS[1] in configRecord
+      ? {
+          strongReasoningModelRefs: normalizedRolePools.strongReasoningModelRefs as string[],
+        }
+      : {}),
+    ...(typeof normalizedRolePools.adaptiveJudgeModelRef === "string"
+      ? { adaptiveJudgeModelRef: normalizedRolePools.adaptiveJudgeModelRef }
+      : {}),
     explorationRate: Math.min(1, Math.max(0, toFiniteNumber(configRecord.explorationRate) ?? 0.05)),
     modePack:
       typeof configRecord.modePack === "string" && configRecord.modePack.trim().length > 0
         ? configRecord.modePack
         : "ship-fast",
     budgetCap: toPositiveNumber(configRecord.budgetCap),
-    weights: {
-      quota: toFiniteNumber(rawWeights.quota) ?? DEFAULT_INTELLIGENT_WEIGHTS.quota,
-      health: toFiniteNumber(rawWeights.health) ?? DEFAULT_INTELLIGENT_WEIGHTS.health,
-      costInv: toFiniteNumber(rawWeights.costInv) ?? DEFAULT_INTELLIGENT_WEIGHTS.costInv,
-      latencyInv: toFiniteNumber(rawWeights.latencyInv) ?? DEFAULT_INTELLIGENT_WEIGHTS.latencyInv,
-      taskFit: toFiniteNumber(rawWeights.taskFit) ?? DEFAULT_INTELLIGENT_WEIGHTS.taskFit,
-      stability: toFiniteNumber(rawWeights.stability) ?? DEFAULT_INTELLIGENT_WEIGHTS.stability,
-      tierPriority:
-        toFiniteNumber(rawWeights.tierPriority) ?? DEFAULT_INTELLIGENT_WEIGHTS.tierPriority,
-      tierAffinity:
-        toFiniteNumber(rawWeights.tierAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.tierAffinity,
-      specificityMatch:
-        toFiniteNumber(rawWeights.specificityMatch) ?? DEFAULT_INTELLIGENT_WEIGHTS.specificityMatch,
-      contextAffinity:
-        toFiniteNumber(rawWeights.contextAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.contextAffinity,
-      cacheAffinity:
-        toFiniteNumber(rawWeights.cacheAffinity) ?? DEFAULT_INTELLIGENT_WEIGHTS.cacheAffinity,
-      sessionAvailability:
-        toFiniteNumber(rawWeights.sessionAvailability) ??
-        DEFAULT_INTELLIGENT_WEIGHTS.sessionAvailability,
-      resetWindowAffinity:
-        toFiniteNumber(rawWeights.resetWindowAffinity) ??
-        DEFAULT_INTELLIGENT_WEIGHTS.resetWindowAffinity,
-    },
+    weights: normalizeIntelligentWeights(configRecord.weights),
+    ...(isRecord(configRecord.fastWorkerWeights)
+      ? { fastWorkerWeights: normalizeIntelligentWeights(configRecord.fastWorkerWeights) }
+      : {}),
+    ...(isRecord(configRecord.strongReasoningWeights)
+      ? { strongReasoningWeights: normalizeIntelligentWeights(configRecord.strongReasoningWeights) }
+      : {}),
     routerStrategy:
       typeof configRecord.routerStrategy === "string" &&
       configRecord.routerStrategy.trim().length > 0

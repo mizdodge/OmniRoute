@@ -449,6 +449,7 @@ async function orderByStrategy(
       resilienceSettings: deps.resilienceSettings,
       log,
       buildAutoCandidates: deps.buildAutoCandidates,
+      handleSingleModel: deps.handleSingleModelWithTimeout,
     });
     if ("earlyResponse" in autoResult) return { earlyResponse: autoResult.earlyResponse };
     return {
@@ -586,12 +587,14 @@ function applyTaskAwareOrdering(
   const task = classifyTask(body);
   const conversationCacheKey = getConversationCacheKey(body);
   const taskReordered = reorderByTaskWeight(orderedTargets, task);
-  // #4945 regression guard: when an explicit auto router (lkgp/cost/…) pinned
-  // orderedTargets[0], keep that primary choice and let task-aware refine only
-  // the fallback tail — otherwise task weighting silently defeats the operator's
-  // chosen LKGP/cost selection. reorderByTaskWeight returns the same target
-  // objects (no clone), so identity filtering is safe.
-  const pinnedFirst = autoUsedExplicitRouter ? orderedTargets[0] : undefined;
+  // Auto has already classified and scored the request before this legacy layer.
+  // Keep its primary choice for both the rules router and explicit sub-routers;
+  // task-aware routing may refine only the fallback tail. Otherwise structural
+  // client metadata (for example, many advertised IDE tools plus a large system
+  // prompt) can silently replace an adaptive Fast Worker selection with Ultra.
+  // reorderByTaskWeight returns the same target objects, so identity filtering is safe.
+  const preserveAutoPrimary = strategy === "auto" || autoUsedExplicitRouter;
+  const pinnedFirst = preserveAutoPrimary ? orderedTargets[0] : undefined;
   const nextOrder = pinnedFirst
     ? [pinnedFirst, ...taskReordered.filter((t) => t !== pinnedFirst)]
     : taskReordered;
@@ -679,9 +682,9 @@ async function applyPromptCacheStage(
 
   // Determine affinity scope: restrict to model-level for deterministic strategies
   // to preserve operator-defined model order; keep global for cross-model
-  // strategies. Per #8370, lkgp/auto/cache-optimized explicitly support promoting
-  // a previously-successful model ahead of the declared order, so they must stay
-  // cross-model ("global") rather than be locked into a single model step.
+  // strategies. LKGP/Auto/cache-optimized keep global affinity so fallback models
+  // can move across the tail; the primary protection below re-pins the strategy's
+  // selected first target when required.
   const modelOrderPreservingStrategies = new Set<string>([
     "priority",
     "weighted",

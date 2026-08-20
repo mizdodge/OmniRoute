@@ -2069,11 +2069,27 @@ paths:
           description: Created combo
 
   /api/combos/{id}:
-    patch:
+    get:
+      tags: [Combos]
+      summary: Get routing combo
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Routing combo
+        "404":
+          description: Combo not found
+    put:
       tags: [Combos]
       summary: Update combo
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComboUpdate"
       responses:
         "200":
           description: Updated combo
@@ -8839,12 +8855,14 @@ components:
 
     ComboCreate:
       type: object
-      required: [name, model]
+      required: [name]
       properties:
         name:
           type: string
-        model:
+          maxLength: 100
+        description:
           type: string
+          maxLength: 2000
         strategy:
           type: string
           enum:
@@ -8864,16 +8882,166 @@ components:
             - auto
             - lkgp
             - context-optimized
+            - cache-optimized
             - fusion
+            - pipeline
           default: priority
-        nodes:
+        models:
           type: array
           items:
-            type: object
-            properties:
-              connectionId:
-                type: string
-              weight:
-                type: integer
-              priority:
-                type: integer
+            oneOf:
+              - type: string
+              - $ref: "#/components/schemas/ComboModelStep"
+              - $ref: "#/components/schemas/ComboRefStep"
+        config:
+          $ref: "#/components/schemas/ComboRuntimeConfig"
+
+    ComboUpdate:
+      type: object
+      description: At least one supported field is required.
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        strategy:
+          type: string
+          enum:
+            - priority
+            - weighted
+            - round-robin
+            - context-relay
+            - fill-first
+            - p2c
+            - random
+            - least-used
+            - cost-optimized
+            - reset-aware
+            - reset-window
+            - headroom
+            - strict-random
+            - auto
+            - lkgp
+            - context-optimized
+            - cache-optimized
+            - fusion
+            - pipeline
+        models:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - $ref: "#/components/schemas/ComboModelStep"
+              - $ref: "#/components/schemas/ComboRefStep"
+        config:
+          $ref: "#/components/schemas/ComboRuntimeConfig"
+        isActive:
+          type: boolean
+
+    ComboModelStep:
+      type: object
+      required: [model]
+      properties:
+        id:
+          type: string
+          description: Stable Step ID used by adaptive role references.
+        kind:
+          type: string
+          enum: [model]
+        provider:
+          type: string
+        providerId:
+          type: string
+        model:
+          type: string
+        connectionId:
+          type: string
+          nullable: true
+        weight:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    ComboRefStep:
+      type: object
+      required: [kind, comboName]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [combo-ref]
+        comboName:
+          type: string
+        weight:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    ComboScoringWeights:
+      type: object
+      additionalProperties: false
+      required: [quota, health, costInv, latencyInv, taskFit, stability]
+      properties:
+        quota: { type: number, minimum: 0, maximum: 1 }
+        health: { type: number, minimum: 0, maximum: 1 }
+        costInv: { type: number, minimum: 0, maximum: 1 }
+        latencyInv: { type: number, minimum: 0, maximum: 1 }
+        taskFit: { type: number, minimum: 0, maximum: 1 }
+        stability: { type: number, minimum: 0, maximum: 1 }
+        tierPriority: { type: number, minimum: 0, maximum: 1 }
+        tierAffinity: { type: number, minimum: 0, maximum: 1 }
+        specificityMatch: { type: number, minimum: 0, maximum: 1 }
+        contextAffinity: { type: number, minimum: 0, maximum: 1 }
+        cacheAffinity: { type: number, minimum: 0, maximum: 1 }
+        sessionAvailability: { type: number, minimum: 0, maximum: 1 }
+        resetWindowAffinity: { type: number, minimum: 0, maximum: 1 }
+
+    ComboRuntimeConfig:
+      type: object
+      additionalProperties: true
+      properties:
+        candidatePool:
+          type: array
+          items:
+            type: string
+        fastWorkerModelRefs:
+          type: array
+          description: Stable model Step IDs preferred for simple requests.
+          maxItems: 200
+          items:
+            type: string
+        strongReasoningModelRefs:
+          type: array
+          description: Stable model Step IDs preferred for complex requests.
+          maxItems: 200
+          items:
+            type: string
+        adaptiveJudgeModelRef:
+          type: string
+          description: Optional single model Step ID used to classify each request before adaptive role selection.
+          minLength: 1
+          maxLength: 200
+        weights:
+          description: Default scoring profile for neutral requests and roles without a custom profile.
+          $ref: "#/components/schemas/ComboScoringWeights"
+        fastWorkerWeights:
+          description: Optional scoring profile used to rank multiple eligible Fast Worker Steps.
+          $ref: "#/components/schemas/ComboScoringWeights"
+        strongReasoningWeights:
+          description: Optional scoring profile used to rank multiple eligible Strong Reasoning Steps.
+          $ref: "#/components/schemas/ComboScoringWeights"
+        modePack:
+          type: string
+        routerStrategy:
+          type: string
+        explorationRate:
+          type: number
+          minimum: 0
+          maximum: 1
+        budgetCap:
+          type: number
+          exclusiveMinimum: 0

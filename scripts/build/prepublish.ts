@@ -361,10 +361,10 @@ const chatGptWebCodexMcpDestFile = join(
 if (existsSync(chatGptWebCodexMcpSrcFile)) {
   console.log("  🔨 Bundling ChatGPT Web (Codex) MCP bridge...");
   mkdirSync(dirname(chatGptWebCodexMcpDestFile), { recursive: true });
-  execFileSync(
-    NPX_BIN,
+  runBuildTool(
+    "esbuild",
+    "esbuild",
     [
-      "esbuild",
       "open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/mcp-server.ts",
       "--bundle",
       "--platform=node",

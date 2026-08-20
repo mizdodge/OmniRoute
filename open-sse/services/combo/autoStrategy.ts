@@ -28,7 +28,11 @@ import type {
   ResolvedComboTarget,
 } from "./types.ts";
 import { extractSessionAffinityKey } from "@/sse/services/auth";
-import { DEFAULT_INTENT_CONFIG, type IntentClassifierConfig } from "../intentClassifier.ts";
+import {
+  DEFAULT_INTENT_CONFIG,
+  extractUserRequestFromClientEnvelope,
+  type IntentClassifierConfig,
+} from "../intentClassifier.ts";
 import { getTaskFitness } from "../autoCombo/taskFitness.ts";
 import {
   calculateFactors,
@@ -153,9 +157,11 @@ export function extractPromptForIntent(body: Record<string, unknown> | null | un
   const fromMessages = Array.isArray(body.messages)
     ? [...body.messages].reverse().find((m) => isRecord(m) && m.role === "user")
     : null;
-  if (isRecord(fromMessages)) return toTextContent(fromMessages.content);
+  if (isRecord(fromMessages)) {
+    return extractUserRequestFromClientEnvelope(toTextContent(fromMessages.content));
+  }
 
-  if (typeof body.input === "string") return body.input;
+  if (typeof body.input === "string") return extractUserRequestFromClientEnvelope(body.input);
   if (Array.isArray(body.input)) {
     const text = body.input
       .map((item) => {
@@ -166,10 +172,12 @@ export function extractPromptForIntent(body: Record<string, unknown> | null | un
       })
       .filter(Boolean)
       .join("\n");
-    if (text) return text;
+    if (text) return extractUserRequestFromClientEnvelope(text);
   }
 
-  if (typeof body.prompt === "string") return body.prompt;
+  if (typeof body.prompt === "string") {
+    return extractUserRequestFromClientEnvelope(body.prompt);
+  }
   return "";
 }
 

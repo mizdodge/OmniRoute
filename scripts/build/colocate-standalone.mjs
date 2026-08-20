@@ -21,6 +21,7 @@ import { computeDependencyClosure } from "./colocateOptionals.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const STANDALONE = join(ROOT, ".build", "next", "standalone");
+const ESBUILD_CLI = join(ROOT, "node_modules", "esbuild", "bin", "esbuild");
 
 const CALL_LOG_WORKER_REL = join("src", "lib", "usage", "callLogArtifactWorker.js");
 const CALL_LOG_WORKER_SRC = join(ROOT, "src", "lib", "usage", "callLogArtifactWorker.ts");
@@ -45,8 +46,9 @@ if (!existsSync(STANDALONE)) {
 const callLogWorkerDest = join(STANDALONE, CALL_LOG_WORKER_REL);
 mkdirSync(dirname(callLogWorkerDest), { recursive: true });
 execFileSync(
-  join(ROOT, "node_modules", ".bin", "esbuild"),
+  process.execPath,
   [
+    ESBUILD_CLI,
     CALL_LOG_WORKER_SRC,
     "--bundle",
     "--platform=node",
@@ -71,8 +73,9 @@ if (!existsSync(workerDest)) {
   mkdirSync(dirname(workerDest), { recursive: true });
   try {
     execFileSync(
-      join(ROOT, "node_modules", ".bin", "esbuild"),
+      process.execPath,
       [
+        ESBUILD_CLI,
         join(ROOT, "open-sse", "services", "compression", "engines", "llmlingua", "onnxWorker.ts"),
         "--bundle",
         "--platform=node",

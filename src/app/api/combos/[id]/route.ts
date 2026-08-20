@@ -14,6 +14,10 @@ import { QUOTA_MODEL_PREFIX } from "@/lib/quota/quotaModelNaming";
 import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
+import {
+  hasIntelligentRolePoolConfig,
+  normalizeIntelligentRolePoolConfig,
+} from "@/lib/combos/intelligentRouting";
 
 // Minimal shape for the fields we read off a combo row in this route.
 // `getComboById` returns a structurally `JsonRecord`-typed object, so we
@@ -164,19 +168,39 @@ export async function PUT(request, { params }) {
       normalizedUpdate.config = stripLegacyComboConfigKeys(normalizedUpdate.config);
     }
 
-    const body = normalizedUpdate.models
-      ? {
-          ...normalizedUpdate,
-          models: normalizeComboModels(normalizedUpdate.models, {
-            comboName: String(comboName),
-            // `allCombos` from `getCombos()` is typed as the DB-shaped record
-            // (JsonRecord & { version: 2; models: ComboStep[] }) which is
-            // structurally compatible with the local ComboCollectionLike in
-            // `normalizeComboModels` but TS does not infer the relationship.
-            allCombos: allCombos as never,
-          }),
-        }
-      : normalizedUpdate;
+    const nextModels = normalizedUpdate.models
+      ? normalizeComboModels(normalizedUpdate.models, {
+          comboName: String(comboName),
+          // `allCombos` from `getCombos()` is typed as the DB-shaped record
+          // (JsonRecord & { version: 2; models: ComboStep[] }) which is
+          // structurally compatible with the local ComboCollectionLike in
+          // `normalizeComboModels` but TS does not infer the relationship.
+          allCombos: allCombos as never,
+        })
+      : normalizeComboModels(currentCombo.models, {
+          comboName: String(comboName),
+          allCombos: allCombos as never,
+        });
+    const shouldNormalizeRolePools =
+      normalizedUpdate.config !== undefined ||
+      (normalizedUpdate.models !== undefined && hasIntelligentRolePoolConfig(currentCombo.config));
+    const rolePoolConfigSource =
+      normalizedUpdate.config !== undefined ? normalizedUpdate.config : currentCombo.config;
+    const body = {
+      ...normalizedUpdate,
+      ...(normalizedUpdate.models ? { models: nextModels } : {}),
+      ...(shouldNormalizeRolePools &&
+      rolePoolConfigSource &&
+      typeof rolePoolConfigSource === "object" &&
+      !Array.isArray(rolePoolConfigSource)
+        ? {
+            config: normalizeIntelligentRolePoolConfig(
+              rolePoolConfigSource as Record<string, unknown>,
+              nextModels
+            ),
+          }
+        : {}),
+    };
     const nextComboState = {
       ...currentCombo,
       ...body,

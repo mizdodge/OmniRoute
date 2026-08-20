@@ -1099,7 +1099,58 @@ Full architecture reference: [`ARCHITECTURE.md`](../architecture/ARCHITECTURE.md
 
 ## Combo Management
 
-Higher-level routing combos (already summarized under `/api/combos*`) can also be mapped 1:1 from a model id pattern, allowing transparent redirection of an OpenAI-style model id to a combo.
+Higher-level routing Combos are managed through the authenticated API:
+
+| Method | Path               | Description                                 |
+| ------ | ------------------ | ------------------------------------------- |
+| GET    | `/api/combos`      | List Combos                                 |
+| POST   | `/api/combos`      | Create a Combo                              |
+| GET    | `/api/combos/[id]` | Retrieve one Combo                          |
+| PUT    | `/api/combos/[id]` | Update supplied fields on an existing Combo |
+| DELETE | `/api/combos/[id]` | Delete a Combo                              |
+
+For an adaptive `auto` Combo, `fastWorkerModelRefs` and `strongReasoningModelRefs` in `config`
+refer to stable `id` values on model Steps:
+
+```json
+{
+  "name": "adaptive-production",
+  "strategy": "auto",
+  "models": [
+    { "id": "fast-step", "kind": "model", "provider": "openai", "model": "gpt-4o-mini" },
+    { "id": "strong-step", "kind": "model", "provider": "anthropic", "model": "claude-sonnet-4-5" }
+  ],
+  "config": {
+    "fastWorkerModelRefs": ["fast-step"],
+    "strongReasoningModelRefs": ["strong-step"],
+    "adaptiveJudgeModelRef": "fast-step",
+    "fastWorkerWeights": {
+      "quota": 0,
+      "health": 0,
+      "costInv": 1,
+      "latencyInv": 0,
+      "taskFit": 0,
+      "stability": 0
+    }
+  }
+}
+```
+
+Unknown role references are removed during create/update normalization. Empty pools are valid, and
+one Step may belong to both pools. `fastWorkerWeights` and `strongReasoningWeights` are optional. A
+single eligible Step in the preferred role is selected directly; with multiple eligible Steps, the
+matching role profile ranks only those Steps. Without a custom role profile, the default `weights`
+or active Mode Pack is used. See [Auto-Combo](../routing/AUTO-COMBO.md#adaptive-model-roles) for
+classification, scoring, and fallback behavior.
+
+`adaptiveJudgeModelRef` is optional and accepts exactly one stable model Step ID from the same
+Combo. When configured, that model performs one small non-streaming classification call and returns
+**FAST_WORKER** or **STRONG_REASONING**. Invalid output or judge failure falls back to deterministic
+classification without failing the main request. If the referenced Step is later removed, the
+reference is pruned during update normalization.
+
+Combos can also be mapped 1:1 from a model id pattern, allowing transparent redirection of an
+OpenAI-style model id to a Combo.
 
 | Method | Path                             | Description                                                                    |
 | ------ | -------------------------------- | ------------------------------------------------------------------------------ |
