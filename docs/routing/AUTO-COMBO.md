@@ -226,13 +226,16 @@ call.
 `adaptiveJudgeModelRef` optionally enables an AI classification call before role selection. It is
 a single stable Step ID, and create/update normalization accepts it only when it points to a model
 Step in the same Combo. The Builder therefore exposes a single-select containing only that Combo's
-models. The judge receives the extracted current user request without the client's tools or prior
-conversation and must return exactly **FAST_WORKER** or **STRONG_REASONING**. It is called only when
-the deterministic classifier remains neutral; deterministic Fast Worker and Strong Reasoning
-decisions bypass the judge. An HTTP error, timeout, missing/stale Step, or invalid verdict leaves the
-request neutral and never blocks the user's main request. Successful decisions are cached for one
-hour by Combo, judge execution target, and extracted prompt, with a 1,000-entry process-local bound,
-so repeated automation turns do not repeatedly invoke the judge.
+models. The classifier receives the extracted current user request plus a bounded summary of at
+most six recent meaningful user/assistant/tool events and compact execution metadata. It never
+receives the client's tool definitions. Conversation size and advertised tool count are capability
+metadata, not proof that the current task needs Strong Reasoning. The classifier must return exactly
+**FAST_WORKER** or **STRONG_REASONING** and is called only when deterministic rules remain neutral;
+clear Fast Worker and Strong Reasoning decisions bypass it. An HTTP error, timeout, missing/stale
+Step, or invalid verdict leaves the request neutral and never blocks the user's main request.
+Successful decisions are cached for one hour by Combo, classifier execution target, extracted
+prompt, and bounded routing-context digest, with a 1,000-entry process-local bound. The same short
+prompt in a materially different execution state is therefore classified again.
 The internal judge call is non-streaming, is excluded from Context Relay/session-affinity tracking,
 and still passes through normal provider authentication, circuit breakers, and request sanitization.
 A judge Step that is not also selected in Fast Worker or Strong Reasoning is judge-only: it is
@@ -245,7 +248,8 @@ explicit request while environment, workspace, editor, memory, and reminder bloc
 System prompts and merely available tool schemas do not promote a request. An explicit tool choice
 is ignored on an assistant/tool continuation because it describes the ongoing automation protocol,
 not a new complexity request. Long-input promotion uses the extracted current request rather than
-accumulated conversation history.
+accumulated conversation history. Two recent failed tool events can promote an ambiguous
+fix/debug/continue request, while total input size remains a context-window capability requirement.
 
 Role membership is resolved only after ordinary eligibility filtering. It cannot restore a target
 excluded by capability, context, quota, connection cooldown, model lockout, or circuit-breaker
@@ -253,6 +257,9 @@ rules. For the standard rules router, primary scoring and epsilon exploration ar
 preferred role whenever that pool has a routable candidate; exploration therefore cannot send a
 Simple request to Strong Reasoning. Once Auto selects its primary, the legacy task-aware and
 prompt-cache-affinity stages may reorder only the fallback tail; neither may replace that primary.
+For Auto, fallback task-power ordering is aligned with the front Fast/Strong decision. Raw history
+size is retained only for context-capacity fit and cannot independently turn a Fast fallback order
+into Heavy/Critical.
 The finite execution fallback remains preferred role, alternate role, then unassigned/ordinary
 targets, deduplicated by execution identity. If the preferred role pool is empty, all non-judge
 model Steps become the general worker pool and are scored using that role's Advanced profile.
@@ -806,6 +813,7 @@ intentionally excluded from CI because they require live credentials and VPS acc
 | :-------------------------------------------------------- | :------------------------------------------------------------------------- |
 | `open-sse/services/autoCombo/scoring.ts`                  | Baseline and adaptive-role scoring, `DEFAULT_WEIGHTS`, normalization       |
 | `open-sse/services/autoCombo/taskClassification.ts`       | Deterministic request complexity and preferred-role classification         |
+| `open-sse/services/autoCombo/routingContext.ts`           | Bounded front context, capability metadata, and classifier cache digest    |
 | `open-sse/services/autoCombo/taskFitness.ts`              | Model × task fitness lookup                                                |
 | `open-sse/services/autoCombo/engine.ts`                   | Selection logic, bandit, budget cap                                        |
 | `open-sse/services/autoCombo/selfHealing.ts`              | Exclusion, probes, incident mode                                           |

@@ -728,3 +728,31 @@ Status: Completed
   the effective source. Add an effective-profile preview or disable/explain shadowed controls.
 - Rename the stale `Rules (6-Factor Scoring)` label because Auto scoring now contains more than six
   factors.
+
+### Front Task Analysis & Context-Aware Classification
+
+Status: Completed
+
+- Added a shared front routing context that separates current-task complexity from technical
+  capability requirements. Total input size, message count, and advertised tool count no longer
+  promote an Auto request to Strong Reasoning by themselves.
+- Added a bounded recent-work summary (maximum six meaningful events / 2,000 characters), recent
+  tool activity and failure signals, normalized reasoning effort, and a stable context digest.
+- Deterministic classification still prioritizes the extracted current request. Two recent failed
+  tool events can promote an otherwise ambiguous fix/debug/continue automation turn.
+- AI Intent Classifier calls now receive the current request plus bounded execution context, not raw
+  conversation history or tool schemas. Cache keys include the routing-context digest, preventing a
+  stale Fast verdict from being reused after the execution state materially changes.
+- Auto passes its final Fast/Strong decision to legacy fallback ordering. Legacy task routing keeps
+  full input size for context-window fit, but raw history/tool inventory cannot independently change
+  the reasoning tier selected by the front classifier.
+- Added structured debug telemetry for current-request tokens, total-input tokens, message/tool
+  counts, recent tool activity/failures, and the context digest. Auto selection logs now include the
+  concrete classification signals.
+
+#### Validation
+
+- Expanded native routing/integration suite: 85 passed, 0 failed.
+- The performance gate remained below 1 ms/request (0.0065 ms/request across 20,000 requests × 20
+  candidates); IDE-envelope extraction averaged 0.0654 ms/request.
+- Core TypeScript, targeted ESLint, Prettier, and diff checks passed.

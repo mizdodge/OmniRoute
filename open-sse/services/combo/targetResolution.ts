@@ -34,6 +34,7 @@ import { orderTargetsByEvalScores } from "../evalRouting.ts";
 import { parseModel } from "../model.ts";
 import { isProviderInCooldown } from "../providerCooldownTracker.ts";
 import {
+  alignTaskWithAdaptiveRole,
   classifyTask,
   getConversationCacheKey,
   isTaskRoutingStrategy,
@@ -67,6 +68,7 @@ import {
 } from "./providerWildcard.ts";
 import { preScreenTargets, type PreScreenResult } from "./quotaStrategies.ts";
 import { resolveAutoStrategyOrder, type ResolveAutoStrategyDeps } from "./resolveAutoStrategy.ts";
+import type { AdaptiveTaskClassification } from "../autoCombo/taskClassification.ts";
 import {
   MAX_RR_COUNTERS,
   clampStickyWeightedTargetLimit,
@@ -435,7 +437,11 @@ async function orderByStrategy(
   initialOrderedTargets: ResolvedComboTarget[]
 ): Promise<
   | { earlyResponse: Response }
-  | { orderedTargets: ResolvedComboTarget[]; autoUsedExplicitRouter: boolean }
+  | {
+      orderedTargets: ResolvedComboTarget[];
+      autoUsedExplicitRouter: boolean;
+      adaptiveTask?: AdaptiveTaskClassification;
+    }
 > {
   const { strategy, body, combo, settings, config, log } = deps;
   if (strategy === "auto") {
@@ -455,6 +461,7 @@ async function orderByStrategy(
     return {
       orderedTargets: autoResult.orderedTargets,
       autoUsedExplicitRouter: autoResult.autoUsedExplicitRouter,
+      adaptiveTask: autoResult.adaptiveTask,
     };
   }
   const orderedTargets = await applyStrategyOrdering(strategy, initialOrderedTargets, {
@@ -580,11 +587,16 @@ async function applyContinuityFilters(
 function applyTaskAwareOrdering(
   deps: ResolveComboTargetPipelineDeps,
   orderedTargets: ResolvedComboTarget[],
-  autoUsedExplicitRouter: boolean
+  autoUsedExplicitRouter: boolean,
+  adaptiveTask?: AdaptiveTaskClassification
 ): ResolvedComboTarget[] {
   const { strategy, body, log } = deps;
   if (!isTaskRoutingStrategy(strategy)) return orderedTargets;
-  const task = classifyTask(body);
+  const legacyTask = classifyTask(body);
+  const task =
+    strategy === "auto"
+      ? alignTaskWithAdaptiveRole(legacyTask, adaptiveTask?.preferredRole ?? null)
+      : legacyTask;
   const conversationCacheKey = getConversationCacheKey(body);
   const taskReordered = reorderByTaskWeight(orderedTargets, task);
   // Auto has already classified and scored the request before this legacy layer.
@@ -761,11 +773,16 @@ export async function resolveComboTargetPipeline(
 
   const ordering = await orderByStrategy(deps, orderedTargets);
   if ("earlyResponse" in ordering) return ordering;
-  const { autoUsedExplicitRouter } = ordering;
+  const { autoUsedExplicitRouter, adaptiveTask } = ordering;
 
   const continuity = await applyContinuityFilters(deps, ordering.orderedTargets);
   if ("earlyResponse" in continuity) return continuity;
-  orderedTargets = applyTaskAwareOrdering(deps, continuity.orderedTargets, autoUsedExplicitRouter);
+  orderedTargets = applyTaskAwareOrdering(
+    deps,
+    continuity.orderedTargets,
+    autoUsedExplicitRouter,
+    adaptiveTask
+  );
   orderedTargets = await applyPromptCacheStage(
     deps,
     orderedTargets,

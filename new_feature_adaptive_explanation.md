@@ -901,3 +901,22 @@ A Mode Pack is currently the effective base weight source when one is selected. 
 Default / Neutral sliders can remain editable while a preset shadows them. A follow-up should show
 the effective profile and normalized factor contributions (or disable shadowed controls), and
 rename the stale `Rules (6-Factor Scoring)` label now that the scorer exposes more factors.
+
+---
+
+## Front Task Analysis
+
+Auto routing now builds one bounded context before worker-role selection. The context keeps three
+concerns separate:
+
+- **current task**: the extracted request remains authoritative for Fast/Strong complexity;
+- **recent execution**: at most six meaningful events summarize continuation state and recent tool
+  failures without forwarding raw history;
+- **capability metadata**: total input size, requested output, message count, and advertised tools
+  constrain what a model can execute but do not imply reasoning difficulty.
+
+The optional AI Intent Classifier receives this bounded context only when deterministic rules are
+neutral. Its cache key includes a context digest, so identical text such as `continue` is rejudged
+when recent execution state changes. Legacy task-aware fallback ordering consumes the final front
+role decision: it retains raw input size for context-window fit but cannot independently promote a
+Fast request to Heavy/Critical because the conversation happens to be long.

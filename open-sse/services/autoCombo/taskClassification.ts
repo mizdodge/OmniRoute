@@ -1,4 +1,5 @@
 import type { IntentType } from "../intentClassifier.ts";
+import type { FrontRoutingContext } from "./routingContext.ts";
 
 export type AdaptiveRolePreference = "fastWorker" | "strongReasoning" | null;
 
@@ -48,14 +49,26 @@ export function classifyAdaptiveTask(
   intent: IntentType,
   body: Record<string, unknown> | null | undefined,
   estimatedInputTokens = 0,
-  prompt = ""
+  prompt = "",
+  routingContext?: FrontRoutingContext
 ): AdaptiveTaskClassification {
   const signals: string[] = [];
-  const automationContinuation = isAutomationContinuation(body);
+  const automationContinuation =
+    routingContext?.execution.isContinuation ?? isAutomationContinuation(body);
+  const effort = routingContext?.execution.reasoningEffort ?? "";
+  const highEffort = /^(high|xhigh|max|maximum|hard|deep)$/.test(effort);
 
   if (COMPLEX_INTENTS.has(intent)) signals.push(`intent:${intent}`);
   if (!automationContinuation && hasExplicitToolChoice(body)) signals.push("explicit-tool-choice");
-  if (estimatedInputTokens >= 2_000) signals.push("long-context");
+  if (estimatedInputTokens >= 2_000) signals.push("long-current-request");
+  if (highEffort) signals.push("high-reasoning-effort");
+  if (
+    automationContinuation &&
+    (routingContext?.execution.recentFailures ?? 0) >= 2 &&
+    /\b(fix|debug|investigate|trace|resolve|continue|lanjut|perbaiki)\b/i.test(prompt)
+  ) {
+    signals.push("continuation:repeated-failures");
+  }
 
   if (signals.length > 0) {
     return { complexity: "complex", preferredRole: "strongReasoning", signals };

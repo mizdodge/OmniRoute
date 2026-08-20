@@ -15,6 +15,7 @@ import { getModePack } from "../autoCombo/modePacks.ts";
 import { classifyAdaptiveTask, getAdaptiveRoleWeight } from "../autoCombo/taskClassification.ts";
 import { activateAdaptiveRoleWeight } from "../autoCombo/scoring.ts";
 import { runAdaptiveJudge } from "../autoCombo/adaptiveJudge.ts";
+import { buildFrontRoutingContext } from "../autoCombo/routingContext.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
 import { classifyWithConfig } from "../intentClassifier.ts";
@@ -87,7 +88,11 @@ export interface ResolveAutoStrategyDeps {
 
 export type ResolveAutoStrategyResult =
   | { earlyResponse: Response }
-  | { orderedTargets: ResolvedComboTarget[]; autoUsedExplicitRouter: boolean };
+  | {
+      orderedTargets: ResolvedComboTarget[];
+      autoUsedExplicitRouter: boolean;
+      adaptiveTask: ReturnType<typeof classifyAdaptiveTask>;
+    };
 
 /**
  * Resolve target ordering for the `auto` combo strategy.
@@ -223,7 +228,23 @@ export async function resolveAutoStrategyOrder(
   recordComboIntent(combo.name, intent);
   const taskType = mapIntentToTaskType(intent);
   const estimatedUserRequestTokens = estimateTokens(prompt);
-  let adaptiveTask = classifyAdaptiveTask(intent, body, estimatedUserRequestTokens, prompt);
+  const routingContext = buildFrontRoutingContext(body, prompt);
+  let adaptiveTask = classifyAdaptiveTask(
+    intent,
+    body,
+    estimatedUserRequestTokens,
+    prompt,
+    routingContext
+  );
+  log.debug?.("COMBO", "Front routing context analyzed", {
+    currentRequestTokens: estimatedUserRequestTokens,
+    totalInputTokens: routingContext.capability.estimatedTotalInputTokens,
+    messages: routingContext.capability.messageCount,
+    advertisedTools: routingContext.capability.advertisedToolCount,
+    recentToolEvents: routingContext.execution.recentToolEvents,
+    recentFailures: routingContext.execution.recentFailures,
+    contextDigest: routingContext.contextDigest,
+  });
 
   const {
     routingStrategy,
@@ -326,6 +347,7 @@ export async function resolveAutoStrategyOrder(
       prompt,
       target: judgeTarget,
       cacheScope: combo.id || combo.name,
+      routingContext,
       handleSingleModel: deps.handleSingleModel,
       log,
     });
@@ -542,11 +564,11 @@ export async function resolveAutoStrategyOrder(
 
     log.info(
       "COMBO",
-      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} adaptive=${adaptiveTask.preferredRole || "neutral"} | strategy=${routingStrategy} | ${selectionReason}`
+      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} adaptive=${adaptiveTask.preferredRole || "neutral"} signals=${adaptiveTask.signals.join(",") || "none"} | strategy=${routingStrategy} | ${selectionReason}`
     );
   } else {
     log.warn("COMBO", "Auto strategy has no candidates, keeping default ordering");
   }
 
-  return { orderedTargets, autoUsedExplicitRouter };
+  return { orderedTargets, autoUsedExplicitRouter, adaptiveTask };
 }

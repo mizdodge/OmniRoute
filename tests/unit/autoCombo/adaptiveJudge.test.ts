@@ -6,6 +6,7 @@ import {
   parseAdaptiveJudgeVerdict,
   runAdaptiveJudge,
 } from "@omniroute/open-sse/services/autoCombo/adaptiveJudge.ts";
+import { buildFrontRoutingContext } from "@omniroute/open-sse/services/autoCombo/routingContext.ts";
 import type { ResolvedComboTarget } from "@omniroute/open-sse/services/combo/types.ts";
 
 const judgeTarget = {
@@ -68,14 +69,23 @@ test("AI Judger fails open to the deterministic classifier", async () => {
   assert.equal(upstreamError, null);
 });
 
-test("AI Judger reuses one verdict across repeated automation turns", async () => {
+test("AI Intent Classifier reuses one verdict only for the same routing context", async () => {
   clearAdaptiveJudgeDecisionCache();
   let calls = 0;
-  const classify = () =>
+  const classify = (recentResult: string) =>
     runAdaptiveJudge({
       prompt: "update this endpoint",
       target: judgeTarget,
       cacheScope: "smart-combos",
+      routingContext: buildFrontRoutingContext(
+        {
+          messages: [
+            { role: "tool", content: recentResult },
+            { role: "user", content: "update this endpoint" },
+          ],
+        },
+        "update this endpoint"
+      ),
       handleSingleModel: async () => {
         calls += 1;
         return Response.json({ choices: [{ message: { content: "FAST_WORKER" } }] });
@@ -83,8 +93,9 @@ test("AI Judger reuses one verdict across repeated automation turns", async () =
       log: { info() {}, warn() {}, debug() {} },
     });
 
-  assert.equal(await classify(), "fastWorker");
-  assert.equal(await classify(), "fastWorker");
-  assert.equal(calls, 1);
+  assert.equal(await classify("success"), "fastWorker");
+  assert.equal(await classify("success"), "fastWorker");
+  assert.equal(await classify("Error: tests failed"), "fastWorker");
+  assert.equal(calls, 2);
   clearAdaptiveJudgeDecisionCache();
 });
