@@ -610,12 +610,19 @@ function applyTaskAwareOrdering(
   const nextOrder = pinnedFirst
     ? [pinnedFirst, ...taskReordered.filter((t) => t !== pinnedFirst)]
     : taskReordered;
-  if (nextOrder[0]?.modelStr !== orderedTargets[0]?.modelStr) {
+  if (nextOrder.length > 0) {
     const reasons =
       Array.isArray(task.reasons) && task.reasons.length > 0 ? ` (${task.reasons.join(",")})` : "";
+    const scope = pinnedFirst ? "fallback-only" : "primary-and-fallback";
+    const primary = nextOrder[0]?.modelStr ?? "none";
+    const fallbacks = nextOrder
+      .slice(1)
+      .map((target) => target.modelStr)
+      .join(",");
     log.info(
       "COMBO",
-      `task-route task=${task.level}${reasons} cacheKey=${conversationCacheKey ?? "none"} → ${nextOrder[0]?.modelStr}`
+      `task-route task=${task.level}${reasons} scope=${scope} primary=${primary} ` +
+        `fallbacks=${fallbacks || "none"} cacheKey=${conversationCacheKey ?? "none"}`
     );
   }
   return nextOrder;

@@ -920,3 +920,8 @@ neutral. Its cache key includes a context digest, so identical text such as `con
 when recent execution state changes. Legacy task-aware fallback ordering consumes the final front
 role decision: it retains raw input size for context-window fit but cannot independently promote a
 Fast request to Heavy/Critical because the conversation happens to be long.
+
+Task-aware execution is observable at INFO level on every non-empty task-aware route. Auto logs use
+`scope=fallback-only` and show the protected primary plus ordered fallback tail; legacy task-aware
+strategies that may choose the primary use `scope=primary-and-fallback`. The task level, reasons,
+and conversation cache key remain visible in the same decision line.

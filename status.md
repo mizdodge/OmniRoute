@@ -749,6 +749,10 @@ Status: Completed
 - Added structured debug telemetry for current-request tokens, total-input tokens, message/tool
   counts, recent tool activity/failures, and the context digest. Auto selection logs now include the
   concrete classification signals.
+- Task-aware routing now emits an INFO decision line even when Auto protects the selected primary.
+  The line declares `scope=fallback-only`, the protected primary, the ordered fallback tail, task
+  level/reasons, and conversation cache key; non-Auto task-aware routes use
+  `scope=primary-and-fallback`.
 
 #### Validation
 

@@ -264,7 +264,10 @@ The finite execution fallback remains preferred role, alternate role, then unass
 targets, deduplicated by execution identity. If the preferred role pool is empty, all non-judge
 model Steps become the general worker pool and are scored using that role's Advanced profile.
 Legacy `task-route` may reorder this general fallback tail, but it cannot replace the primary that
-Auto selected. A Combo containing only a judge-only Step has no executable worker target.
+Auto selected. Its INFO log marks this as `scope=fallback-only` and includes the protected primary,
+ordered fallbacks, task level/reasons, and conversation cache key. Non-Auto task-aware strategies
+that may choose the primary log `scope=primary-and-fallback`. A Combo containing only a judge-only
+Step has no executable worker target.
 
 The Builder's Advanced section supports independent `fastWorkerWeights` and
 `strongReasoningWeights` profiles. Selection stays inside the preferred eligible role pool when

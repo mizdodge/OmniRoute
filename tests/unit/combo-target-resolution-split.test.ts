@@ -118,8 +118,15 @@ test("an empty combo yields an empty target pool (combo.ts turns it into a 404)"
 test("auto keeps its adaptive primary when legacy task routing sees many advertised tools", async () => {
   const lightning = "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b";
   const ultra = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+  const infoMessages: string[] = [];
   const result = await resolveComboTargetPipeline(
     deps({
+      log: {
+        ...noopLog,
+        info(_tag: unknown, message: unknown) {
+          infoMessages.push(String(message));
+        },
+      },
       strategy: "auto",
       combo: {
         id: "adaptive-primary-authority",
@@ -174,6 +181,18 @@ test("auto keeps its adaptive primary when legacy task routing sees many adverti
     "legacy many-tools-large-context routing must not replace Auto's selected primary"
   );
   assert.equal(result.orderedTargets[1]?.modelStr, ultra, "Ultra remains the first fallback");
+  const taskRouteLog = infoMessages.find((message) => message.startsWith("task-route "));
+  assert.ok(
+    taskRouteLog,
+    `expected task-route observability log, got: ${infoMessages.join(" | ")}`
+  );
+  assert.match(
+    taskRouteLog,
+    new RegExp(
+      `^task-route task=light \\(adaptive-role:fastWorker\\) scope=fallback-only ` +
+        `primary=${lightning} fallbacks=${ultra} cacheKey=[a-f0-9]+$`
+    )
+  );
 });
 
 test("task-route cannot override a Fast profile primary selected from the general pool", async () => {
