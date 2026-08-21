@@ -14,6 +14,10 @@ interface PromptCacheAffinityTarget {
   authType?: string | null;
 }
 
+type AdaptiveTieredTarget = ResolvedComboTarget & {
+  _omnirouteAdaptiveFallbackTier?: number;
+};
+
 export type PromptCacheAffinitySource = "explicit" | "prefix";
 
 export interface PromptCacheAffinityResolution {
@@ -143,6 +147,11 @@ function combinedAffinityScore(
   const availability =
     target.authType === "oauth" ? getOAuthSessionAvailability(target.connectionId, sessionKey) : 1;
   return cacheScore * 0.75 + availability * 0.25;
+}
+
+function adaptiveFallbackTier(target: ResolvedComboTarget): number | null {
+  const tier = (target as AdaptiveTieredTarget)._omnirouteAdaptiveFallbackTier;
+  return Number.isInteger(tier) && Number(tier) >= 0 ? Number(tier) : null;
 }
 
 /**
@@ -320,7 +329,8 @@ function getBaseModelIdentity(target: ResolvedComboTarget): string {
 /**
  * Order eligible targets using rendezvous hashing.
  * @param scope - "model": sort only within same-model groups, preserving inter-model order;
- *               "global": sort across all targets (original behavior).
+ *               "global": sort across all targets (original behavior), except adaptive
+ *               fallback tiers remain authoritative and only reorder within a tier.
  *               Defaults to "global" for backward compatibility.
  */
 export function applyPromptCacheAffinity(
@@ -346,6 +356,7 @@ export function applyPromptCacheAffinity(
     identity: promptCacheTargetIdentity(target),
     score: combinedAffinityScore(resolution.key, target, sessionKey),
     baseModel: scope === "model" ? getBaseModelIdentity(target) : null,
+    adaptiveTier: adaptiveFallbackTier(target),
   }));
 
   if (scope === "model") {
@@ -387,17 +398,28 @@ export function applyPromptCacheAffinity(
       fingerprint: resolution.fingerprint,
     };
   } else {
-    // Original global sorting behavior
+    // Global affinity stays global for normal strategies. Adaptive Auto targets
+    // carry fallback-tier metadata, so rendezvous ranking may move accounts/models
+    // only inside that tier and can never promote Fast/General ahead of Strong (or
+    // vice versa for a Fast-preferred request).
+    const hasAdaptiveTiers = ranked.some((entry) => entry.adaptiveTier !== null);
     ranked.sort((a, b) => {
+      if (hasAdaptiveTiers) {
+        const aTier = a.adaptiveTier ?? Number.MAX_SAFE_INTEGER;
+        const bTier = b.adaptiveTier ?? Number.MAX_SAFE_INTEGER;
+        if (aTier !== bTier) return aTier - bTier;
+      }
       if (a.score > b.score) return -1;
       if (a.score < b.score) return 1;
       const identityOrder = a.identity.localeCompare(b.identity);
       return identityOrder !== 0 ? identityOrder : a.index - b.index;
     });
 
+    const sortedTargets = ranked.map((entry) => entry.target);
+    const orderChanged = !targets.every((target, i) => target === sortedTargets[i]);
     return {
-      targets: ranked.map((entry) => entry.target),
-      applied: true,
+      targets: sortedTargets,
+      applied: orderChanged,
       source: resolution.source,
       fingerprint: resolution.fingerprint,
     };
