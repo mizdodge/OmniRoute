@@ -4,6 +4,14 @@
 
 ---
 
+## [3.8.51] — TBD
+
+### 🛠️ Improvements
+- **feat(routing):** expose adaptive worker roles, intent classification, bounded front-task analysis, and task-route fallback decisions in intelligent combo routing.
+- **fix(combos):** restore inherited role weights when worker-specific scoring is reset to defaults.
+
+---
+
 ## [3.8.50] — TBD
 
 _Living section — regenerated 2026-08-12 from all cycle commits (cycle open `ed2db6cb19` → tip). Bullets carry the merged PR and its author; direct pushes listed separately._
