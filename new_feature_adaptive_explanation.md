@@ -930,3 +930,60 @@ Task-aware execution is observable at INFO level on every non-empty task-aware r
 `scope=fallback-only` and show the protected primary plus ordered fallback tail; legacy task-aware
 strategies that may choose the primary use `scope=primary-and-fallback`. The task level, reasons,
 and conversation cache key remain visible in the same decision line.
+
+---
+
+## Categorized Adaptive Fallback Pools
+
+The fallback tail is now a **classified execution plan**, not a single globally sortable list.
+After the front classifier chooses a preferred worker role, `rolePools.ts` stamps each resolved
+worker target with request-local membership and an authoritative fallback tier.
+
+The execution hierarchy is:
+
+```text
+Strong Reasoning request:
+  Strong Reasoning pool → Fast Worker pool → General/unassigned
+
+Fast Worker request:
+  Fast Worker pool → Strong Reasoning pool → General/unassigned
+```
+
+`task-route` still scores model fitness, but it sorts **within a tier only**. A high task-fit score
+from a later pool cannot cross the tier boundary. For example, a Fast Worker candidate cannot jump
+between two Strong Reasoning candidates while Strong is still the active fallback category.
+Prompt-cache affinity follows the same rule, so the cache stage cannot undo the task-route boundary.
+
+General/unassigned models are intentionally the final safety pool. A Step assigned to both Fast and
+Strong is consumed in the first applicable worker tier and deduplicated by `executionKey`, avoiding
+repeat attempts or fallback loops.
+
+### Task-Route Logging
+
+Adaptive task-route decisions now expose the categorized fallback plan directly at INFO level. A
+Strong Reasoning decision can look like:
+
+```text
+task-route task=heavy (adaptive-role:strongReasoning) scope=fallback-only \
+primary=<selected-strong-model> \
+fallbackPools=strongReasoning:[<strong-2>,<strong-3>] > fastWorker:[<fast-1>,<fast-2>] > general:[<general-1>] \
+cacheKey=<key>
+```
+
+For a Fast Worker request the first two categories reverse. Categories with no surviving target are
+absent from the log. Non-adaptive task-aware strategies keep the legacy flat `fallbacks=...` field,
+so this observability change does not alter their log contract.
+
+### Regression Coverage
+
+`tests/unit/adaptive-task-routing-pool-boundaries.test.ts` locks four behaviors:
+
+1. Strong Reasoning exhausts Strong, then Fast, then General.
+2. Fast Worker exhausts Fast, then Strong, then General.
+3. `task-route` may rearrange models inside a pool but cannot cross pool boundaries.
+4. Prompt-cache affinity cannot promote a target from a later adaptive pool.
+
+The repository's push-triggered `Build App` workflow is also expected to run for this branch. The
+GitHub connector used for this edit does not expose a command runner or workflow run listing for
+push events, so Node/Vitest/typecheck/lint results must be recorded as green only after an actual
+runner reports them; `status.md` keeps that validation state explicit.
