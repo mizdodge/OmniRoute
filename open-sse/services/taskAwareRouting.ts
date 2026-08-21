@@ -388,10 +388,25 @@ export function scoreModelForTask(
   return score;
 }
 
+type AdaptiveTieredTarget = ResolvedComboTarget & {
+  _omnirouteAdaptiveFallbackTier?: number;
+};
+
+function getAdaptiveFallbackTier(target: ResolvedComboTarget): number | null {
+  const tier = (target as AdaptiveTieredTarget)._omnirouteAdaptiveFallbackTier;
+  return Number.isInteger(tier) && Number(tier) >= 0 ? Number(tier) : null;
+}
+
 /**
  * Reorder ResolvedComboTarget[] so the best-fit model for the task comes first.
- * Stable: ties keep original order. Identity-returns when no reordering needed
- * (avoids allocations on the common path). Never removes targets.
+ *
+ * Adaptive Auto routing may stamp targets with a fallback tier. When that metadata
+ * exists, tier order is authoritative and task scoring is allowed to rearrange
+ * only models inside the same pool. This guarantees:
+ *   preferred worker pool -> opposite worker pool -> General/unassigned.
+ *
+ * Non-adaptive task-aware strategies have no tier metadata and retain the original
+ * global score ordering. Stable ties keep original order. Never removes targets.
  */
 export function reorderByTaskWeight(
   targets: ResolvedComboTarget[],
@@ -400,11 +415,25 @@ export function reorderByTaskWeight(
 ): ResolvedComboTarget[] {
   if (!Array.isArray(targets) || targets.length <= 1) return targets;
 
-  const reordered = targets
-    .map((t, i) => ({ t, i, score: scoreModelForTask(t.modelStr, task, required) }))
-    .sort((a, b) => b.score - a.score || a.i - b.i)
-    .map((x) => x.t);
+  const ranked = targets.map((t, i) => ({
+    t,
+    i,
+    tier: getAdaptiveFallbackTier(t),
+    score: scoreModelForTask(t.modelStr, task, required),
+  }));
+  const hasAdaptiveTiers = ranked.some((entry) => entry.tier !== null);
 
+  ranked.sort((a, b) => {
+    if (hasAdaptiveTiers) {
+      // Untagged targets are fail-safe General candidates and therefore last.
+      const aTier = a.tier ?? Number.MAX_SAFE_INTEGER;
+      const bTier = b.tier ?? Number.MAX_SAFE_INTEGER;
+      if (aTier !== bTier) return aTier - bTier;
+    }
+    return b.score - a.score || a.i - b.i;
+  });
+
+  const reordered = ranked.map((entry) => entry.t);
   return reordered.every((t, i) => t === targets[i]) ? targets : reordered;
 }
 
@@ -514,7 +543,7 @@ export function getConversationCacheKey(body: Record<string, unknown>): string |
 
 // ── Affinity management (for round-robin integration) ────────────────────────
 
-/** @internal exported for testing */
+/** @internal exported only for testing */
 export function pruneConversationAffinity(now = Date.now()): void {
   for (const [key, value] of comboConversationAffinity) {
     if (!value || now - value.lastUsed > CONVERSATION_AFFINITY_TTL_MS) {
