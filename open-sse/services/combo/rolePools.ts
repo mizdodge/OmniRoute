@@ -2,12 +2,29 @@ import { isRecord } from "./comboData.ts";
 import type { ResolvedComboTarget } from "./types.ts";
 
 export type IntelligentRole = "fastWorker" | "strongReasoning";
+export type AdaptiveFallbackClass = IntelligentRole | "general";
+export type AdaptiveWorkerMembership = AdaptiveFallbackClass | "both";
+
+/**
+ * Internal per-request routing metadata. These fields live only on resolved Combo
+ * targets; they are never copied into the upstream request body.
+ */
+export type AdaptiveClassifiedTarget = ResolvedComboTarget & {
+  _omnirouteAdaptiveWorkerMembership?: AdaptiveWorkerMembership;
+  _omnirouteAdaptiveFallbackClass?: AdaptiveFallbackClass;
+  _omnirouteAdaptiveFallbackTier?: number;
+};
 
 export type ResolvedRolePoolCandidates = {
-  fastWorker: ResolvedComboTarget[];
-  strongReasoning: ResolvedComboTarget[];
-  unassigned: ResolvedComboTarget[];
-  all: ResolvedComboTarget[];
+  fastWorker: AdaptiveClassifiedTarget[];
+  strongReasoning: AdaptiveClassifiedTarget[];
+  unassigned: AdaptiveClassifiedTarget[];
+  all: AdaptiveClassifiedTarget[];
+};
+
+export type AdaptiveFallbackTier = {
+  fallbackClass: AdaptiveFallbackClass;
+  targets: AdaptiveClassifiedTarget[];
 };
 
 function normalizeRefs(value: unknown): Set<string> {
@@ -21,7 +38,7 @@ function normalizeRefs(value: unknown): Set<string> {
   );
 }
 
-function dedupeTargets(targets: readonly ResolvedComboTarget[]): ResolvedComboTarget[] {
+function dedupeTargets<T extends ResolvedComboTarget>(targets: readonly T[]): T[] {
   const seen = new Set<string>();
   return targets.filter((target) => {
     if (seen.has(target.executionKey)) return false;
@@ -30,10 +47,27 @@ function dedupeTargets(targets: readonly ResolvedComboTarget[]): ResolvedComboTa
   });
 }
 
+function resolveMembership(
+  stepId: string,
+  fastRefs: ReadonlySet<string>,
+  strongRefs: ReadonlySet<string>
+): AdaptiveWorkerMembership {
+  const fast = fastRefs.has(stepId);
+  const strong = strongRefs.has(stepId);
+  if (fast && strong) return "both";
+  if (fast) return "fastWorker";
+  if (strong) return "strongReasoning";
+  return "general";
+}
+
 /**
  * Resolve configured step references against targets that already survived the
  * combo's normal eligibility filters. Role membership never revives an
  * unavailable target and never creates a second model registry.
+ *
+ * Each returned target is request-local and carries its worker membership so
+ * downstream task/cache ordering can preserve fallback-class boundaries instead
+ * of flattening Strong, General, and Fast workers into one list.
  */
 export function resolveRolePoolCandidates(
   config: unknown,
@@ -50,9 +84,18 @@ export function resolveRolePoolCandidates(
   // Selecting a Step as the AI Judger must not silently make it a response
   // candidate. It may only join the worker universe when the operator also
   // assigns that same Step to Fast Worker or Strong Reasoning explicitly.
-  const all = dedupeTargets(eligibleTargets).filter(
-    (target) => !judgeRef || judgeIsWorker || target.stepId !== judgeRef
-  );
+  const all = dedupeTargets(eligibleTargets)
+    .filter((target) => !judgeRef || judgeIsWorker || target.stepId !== judgeRef)
+    .map(
+      (target): AdaptiveClassifiedTarget => ({
+        ...target,
+        _omnirouteAdaptiveWorkerMembership: resolveMembership(
+          target.stepId,
+          fastRefs,
+          strongRefs
+        ),
+      })
+    );
 
   return {
     fastWorker: all.filter((target) => fastRefs.has(target.stepId)),
@@ -79,15 +122,39 @@ export function resolveAdaptiveJudgeTarget(
 }
 
 /**
- * Build one finite fallback chain: preferred role, other role, then ordinary
- * worker candidates. Judge-only Steps were removed while resolving the pools.
- * There is no recursion, so cross-role fallback cannot loop.
+ * Build explicit fallback classes for one adaptive request. The preferred role
+ * is exhausted first, then General/unassigned workers, and only then the opposite
+ * role. A target assigned to both roles is consumed in the preferred tier and
+ * deduplicated before the alternate tier executes.
+ */
+export function buildRolePoolFallbackTiers(
+  pools: ResolvedRolePoolCandidates,
+  preferredRole: IntelligentRole
+): AdaptiveFallbackTier[] {
+  const preferred = preferredRole === "fastWorker" ? pools.fastWorker : pools.strongReasoning;
+  const alternateRole: IntelligentRole =
+    preferredRole === "fastWorker" ? "strongReasoning" : "fastWorker";
+  const alternate = alternateRole === "fastWorker" ? pools.fastWorker : pools.strongReasoning;
+
+  return [
+    { fallbackClass: preferredRole, targets: dedupeTargets(preferred) },
+    { fallbackClass: "general", targets: dedupeTargets(pools.unassigned) },
+    { fallbackClass: alternateRole, targets: dedupeTargets(alternate) },
+  ];
+}
+
+/**
+ * Build one finite fallback chain from the classified tiers. The tier boundary is
+ * authoritative: preferred role -> General -> alternate role. `pools.all` remains
+ * a final safety tail for legacy/malformed callers, while execution-key dedupe
+ * prevents recursion or repeated attempts caused by overlapping memberships.
  */
 export function buildRolePoolFailoverOrder(
   pools: ResolvedRolePoolCandidates,
   preferredRole: IntelligentRole
 ): ResolvedComboTarget[] {
-  const preferred = preferredRole === "fastWorker" ? pools.fastWorker : pools.strongReasoning;
-  const alternate = preferredRole === "fastWorker" ? pools.strongReasoning : pools.fastWorker;
-  return dedupeTargets([...preferred, ...alternate, ...pools.unassigned, ...pools.all]);
+  const tiered = buildRolePoolFallbackTiers(pools, preferredRole).flatMap(
+    (tier) => tier.targets
+  );
+  return dedupeTargets([...tiered, ...pools.all]);
 }
