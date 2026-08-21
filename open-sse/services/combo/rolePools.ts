@@ -67,7 +67,7 @@ function resolveMembership(
  *
  * Each returned target is request-local and carries its worker membership so
  * downstream task/cache ordering can preserve fallback-class boundaries instead
- * of flattening Strong, General, and Fast workers into one list.
+ * of flattening Strong, Fast, and General workers into one list.
  */
 export function resolveRolePoolCandidates(
   config: unknown,
@@ -122,10 +122,10 @@ export function resolveAdaptiveJudgeTarget(
 }
 
 /**
- * Build explicit fallback classes for one adaptive request. The preferred role
- * is exhausted first, then General/unassigned workers, and only then the opposite
- * role. A target assigned to both roles is consumed in the preferred tier and
- * deduplicated before the alternate tier executes.
+ * Build explicit fallback classes for one adaptive request. The selected role is
+ * exhausted first, then the opposite worker role, and General/unassigned models
+ * are always the final safety pool. A target assigned to both roles is consumed
+ * in the preferred tier and deduplicated before the alternate tier executes.
  */
 export function buildRolePoolFallbackTiers(
   pools: ResolvedRolePoolCandidates,
@@ -138,23 +138,50 @@ export function buildRolePoolFallbackTiers(
 
   return [
     { fallbackClass: preferredRole, targets: dedupeTargets(preferred) },
-    { fallbackClass: "general", targets: dedupeTargets(pools.unassigned) },
     { fallbackClass: alternateRole, targets: dedupeTargets(alternate) },
+    { fallbackClass: "general", targets: dedupeTargets(pools.unassigned) },
   ];
 }
 
 /**
- * Build one finite fallback chain from the classified tiers. The tier boundary is
- * authoritative: preferred role -> General -> alternate role. `pools.all` remains
- * a final safety tail for legacy/malformed callers, while execution-key dedupe
- * prevents recursion or repeated attempts caused by overlapping memberships.
+ * Build one finite categorized fallback chain. Each target is stamped with its
+ * request-local fallback tier so downstream task-aware ordering can rank models
+ * *inside* a pool without ever moving one across a pool boundary.
+ *
+ * Order is authoritative: preferred role -> opposite role -> General.
  */
 export function buildRolePoolFailoverOrder(
   pools: ResolvedRolePoolCandidates,
   preferredRole: IntelligentRole
 ): ResolvedComboTarget[] {
-  const tiered = buildRolePoolFallbackTiers(pools, preferredRole).flatMap(
-    (tier) => tier.targets
-  );
-  return dedupeTargets([...tiered, ...pools.all]);
+  const seen = new Set<string>();
+  const tiered: AdaptiveClassifiedTarget[] = [];
+  const tiers = buildRolePoolFallbackTiers(pools, preferredRole);
+
+  tiers.forEach((tier, tierIndex) => {
+    for (const target of tier.targets) {
+      if (seen.has(target.executionKey)) continue;
+      seen.add(target.executionKey);
+      tiered.push({
+        ...target,
+        _omnirouteAdaptiveFallbackClass: tier.fallbackClass,
+        _omnirouteAdaptiveFallbackTier: tierIndex,
+      });
+    }
+  });
+
+  // Preserve legacy/malformed callers that placed a target only in `all`, but
+  // force those extras into the final General tier so they can never jump ahead
+  // of configured Fast/Strong worker pools.
+  for (const target of pools.all) {
+    if (seen.has(target.executionKey)) continue;
+    seen.add(target.executionKey);
+    tiered.push({
+      ...target,
+      _omnirouteAdaptiveFallbackClass: "general",
+      _omnirouteAdaptiveFallbackTier: 2,
+    });
+  }
+
+  return tiered;
 }
