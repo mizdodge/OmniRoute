@@ -848,6 +848,11 @@ The Builder shows whether each role inherits Default or uses a custom profile, a
 shows the saved state before submission. The Combo API schema, normalization, OpenAPI contract, and
 integration tests preserve both optional profiles across create, list, and update operations.
 
+`Use Default` removes that role's override rather than copying the current defaults into a second
+persisted profile. The Builder then hides the role sliders and displays the inheritance notice.
+Re-enabling customization seeds the sliders from the current Default / Neutral profile, so later
+default changes are reflected instead of reviving discarded role values.
+
 ## Internal Context-Handoff Controls
 
 `_omnirouteInternalRequest` and `_omnirouteSkipContextRelay` are local recursion/control flags used

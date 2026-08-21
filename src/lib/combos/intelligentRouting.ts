@@ -342,6 +342,32 @@ export function normalizeIntelligentRoutingConfig(config: unknown): IntelligentR
   };
 }
 
+const INTELLIGENT_ROLE_WEIGHT_KEYS = ["fastWorkerWeights", "strongReasoningWeights"] as const;
+
+/**
+ * Merge the normalized Intelligent Routing builder state without resurrecting
+ * role-weight overrides that the child removed via "Use Default".
+ */
+export function mergeIntelligentRoutingBuilderConfig(
+  previousConfig: JsonRecord,
+  nextIntelligentConfig: JsonRecord
+): JsonRecord {
+  const nextConfig: JsonRecord = {
+    ...previousConfig,
+    ...nextIntelligentConfig,
+    weights: {
+      ...(isRecord(previousConfig.weights) ? previousConfig.weights : {}),
+      ...(isRecord(nextIntelligentConfig.weights) ? nextIntelligentConfig.weights : {}),
+    },
+  };
+
+  for (const key of INTELLIGENT_ROLE_WEIGHT_KEYS) {
+    if (!(key in nextIntelligentConfig)) delete nextConfig[key];
+  }
+
+  return nextConfig;
+}
+
 export function buildIntelligentProviderScores(combo: {
   config?: unknown;
   weights?: unknown;

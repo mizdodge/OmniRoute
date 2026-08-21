@@ -253,6 +253,16 @@ test.describe("Combo Unification", () => {
       .locator("../..");
     await expect(fastWeightsHeader.getByText(/one eligible model/i)).toBeVisible();
     await fastWeightsHeader.getByRole("button", { name: "Customize" }).click();
+    const fastQuotaSlider = fastWeightsHeader.locator('input[type="range"]').first();
+    await fastQuotaSlider.fill("0.9");
+    await expect(fastQuotaSlider).toHaveValue("0.9");
+    await fastWeightsHeader.getByRole("button", { name: "Use Default" }).click();
+    await expect(fastWeightsHeader.getByText(/currently inherits default/i)).toBeVisible();
+    await expect(fastWeightsHeader.locator('input[type="range"]')).toHaveCount(0);
+
+    await fastWeightsHeader.getByRole("button", { name: "Customize" }).click();
+    await expect(fastWeightsHeader.locator('input[type="range"]').first()).toHaveValue("0.16");
+    await fastWeightsHeader.getByRole("button", { name: "Use Default" }).click();
     await next.click();
 
     await expect(dialog.getByText("Fast Worker Pool", { exact: true })).toBeVisible();
@@ -275,7 +285,7 @@ test.describe("Combo Unification", () => {
     expect(config.fastWorkerModelRefs).toEqual([fastStepId]);
     expect(config.strongReasoningModelRefs).toEqual([strongStepId]);
     expect(config.adaptiveJudgeModelRef).toBe(strongStepId);
-    expect(config.fastWorkerWeights).toEqual(expect.objectContaining({ latencyInv: 0.12 }));
+    expect(config.fastWorkerWeights).toBeUndefined();
     expect(config.strongReasoningWeights).toBeUndefined();
   });
 });

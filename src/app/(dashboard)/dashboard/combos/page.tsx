@@ -62,6 +62,7 @@ import {
   isIntelligentStrategy,
   normalizeIntelligentRoutingFilter,
   normalizeIntelligentRoutingConfig,
+  mergeIntelligentRoutingBuilderConfig,
 } from "@/lib/combos/intelligentRouting";
 import { getComboStepTarget, normalizeComboModels } from "@/lib/combos/steps";
 import { resolveServerErrorMessage } from "@/lib/api/serverErrorMessage";
@@ -3171,14 +3172,9 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
                       : normalizedRoleModelSteps.map((entry) => normalizeModelEntry(entry))
                   );
                 }
-                setConfig((previousConfig) => ({
-                  ...previousConfig,
-                  ...nextIntelligentConfig,
-                  weights: {
-                    ...(previousConfig?.weights || {}),
-                    ...((nextIntelligentConfig.weights as Record<string, number>) || {}),
-                  },
-                }));
+                setConfig((previousConfig) =>
+                  mergeIntelligentRoutingBuilderConfig(previousConfig, nextIntelligentConfig)
+                );
               }}
             />
           )}

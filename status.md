@@ -760,3 +760,16 @@ Status: Completed
 - The performance gate remained below 1 ms/request (0.0065 ms/request across 20,000 requests × 20
   candidates); IDE-envelope extraction averaged 0.0654 ms/request.
 - Core TypeScript, targeted ESLint, Prettier, and diff checks passed.
+
+### Post-Phase 5 — Role Weight Inheritance Reset
+
+Status: Completed
+
+- Fixed Combo Builder state merging so `Use Default` removes the selected role's persisted weight
+  override instead of merging the previous custom profile back into state.
+- Returning to inherited mode now hides the role sliders and restores the inheritance notice.
+  Choosing `Customize` again starts from the current Default / Neutral profile rather than the
+  discarded custom values.
+- Added unit regression coverage for authoritative removal while preserving unrelated Combo config
+  and the other role's independent custom profile. The existing browser flow now also asserts the
+  reset, inherited UI, default slider restoration, and omitted save payload.

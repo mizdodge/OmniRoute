@@ -10,6 +10,7 @@ import type { ResolvedComboTarget } from "@omniroute/open-sse/services/combo/typ
 import {
   DEFAULT_INTELLIGENT_WEIGHTS,
   buildIntelligentRoleModelOptions,
+  mergeIntelligentRoutingBuilderConfig,
   normalizeIntelligentRolePoolConfig,
   normalizeIntelligentRoutingConfig,
   toggleIntelligentRoleModelRef,
@@ -92,6 +93,25 @@ test("missing role pools preserve backward-compatible intelligent routing config
   assert.equal("fastWorkerModelRefs" in normalized, false);
   assert.equal("strongReasoningModelRefs" in normalized, false);
   assert.equal("adaptiveJudgeModelRef" in normalized, false);
+});
+
+test("builder merge removes role-weight overrides that switched back to inherited defaults", () => {
+  const previous = {
+    timeoutMs: 30_000,
+    weights: DEFAULT_INTELLIGENT_WEIGHTS,
+    fastWorkerWeights: { ...DEFAULT_INTELLIGENT_WEIGHTS, quota: 0.9 },
+    strongReasoningWeights: { ...DEFAULT_INTELLIGENT_WEIGHTS, taskFit: 0.7 },
+  };
+  const next = normalizeIntelligentRoutingConfig({
+    weights: DEFAULT_INTELLIGENT_WEIGHTS,
+    strongReasoningWeights: previous.strongReasoningWeights,
+  });
+
+  const merged = mergeIntelligentRoutingBuilderConfig(previous, next);
+
+  assert.equal("fastWorkerWeights" in merged, false);
+  assert.deepEqual(merged.strongReasoningWeights, previous.strongReasoningWeights);
+  assert.equal(merged.timeoutMs, 30_000, "unrelated Combo config must remain intact");
 });
 
 test("AI Judger accepts exactly one current Combo model Step and prunes stale refs", () => {
