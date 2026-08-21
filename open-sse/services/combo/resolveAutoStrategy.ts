@@ -12,6 +12,10 @@ import {
 import { selectWithStrategy } from "../autoCombo/routerStrategy.ts";
 import { buildComplexityRoutingHint } from "../autoCombo/complexityRouter";
 import { getModePack } from "../autoCombo/modePacks.ts";
+import { classifyAdaptiveTask, getAdaptiveRoleWeight } from "../autoCombo/taskClassification.ts";
+import { activateAdaptiveRoleWeight } from "../autoCombo/scoring.ts";
+import { runAdaptiveJudge } from "../autoCombo/adaptiveJudge.ts";
+import { buildFrontRoutingContext } from "../autoCombo/routingContext.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
 import { classifyWithConfig } from "../intentClassifier.ts";
@@ -21,6 +25,7 @@ import { supportsToolCalling } from "../modelCapabilities.ts";
 import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { parseAutoConfig } from "./autoConfig.ts";
 import { dedupeTargetsByExecutionKey } from "./comboData.ts";
+import { buildRolePoolFailoverOrder } from "./rolePools.ts";
 import {
   getModelContextLimitForModelString,
   providerSupportsEmulatedToolCalling,
@@ -42,6 +47,7 @@ import type {
   AutoProviderCandidate,
   ComboLike,
   ComboLogger,
+  HandleSingleModel,
   ResolvedComboTarget,
 } from "./types.ts";
 
@@ -77,11 +83,16 @@ export interface ResolveAutoStrategyDeps {
   resilienceSettings: ResilienceSettings;
   log: ComboLogger;
   buildAutoCandidates: BuildAutoCandidates;
+  handleSingleModel: HandleSingleModel;
 }
 
 export type ResolveAutoStrategyResult =
   | { earlyResponse: Response }
-  | { orderedTargets: ResolvedComboTarget[]; autoUsedExplicitRouter: boolean };
+  | {
+      orderedTargets: ResolvedComboTarget[];
+      autoUsedExplicitRouter: boolean;
+      adaptiveTask: ReturnType<typeof classifyAdaptiveTask>;
+    };
 
 /**
  * Resolve target ordering for the `auto` combo strategy.
@@ -216,18 +227,44 @@ export async function resolveAutoStrategyOrder(
   const intent = classifyWithConfig(prompt, intentConfig, systemPrompt);
   recordComboIntent(combo.name, intent);
   const taskType = mapIntentToTaskType(intent);
+  const estimatedUserRequestTokens = estimateTokens(prompt);
+  const routingContext = buildFrontRoutingContext(body, prompt);
+  let adaptiveTask = classifyAdaptiveTask(
+    intent,
+    body,
+    estimatedUserRequestTokens,
+    prompt,
+    routingContext
+  );
+  log.debug?.("COMBO", "Front routing context analyzed", {
+    currentRequestTokens: estimatedUserRequestTokens,
+    totalInputTokens: routingContext.capability.estimatedTotalInputTokens,
+    messages: routingContext.capability.messageCount,
+    advertisedTools: routingContext.capability.advertisedToolCount,
+    recentToolEvents: routingContext.execution.recentToolEvents,
+    recentFailures: routingContext.execution.recentFailures,
+    contextDigest: routingContext.contextDigest,
+  });
 
   const {
     routingStrategy,
     candidatePool,
     weights: configWeights,
+    roleWeights,
     explorationRate,
     budgetCap: configBudgetCap,
     budgetFallback: configBudgetFallback,
     modePack: configModePack,
     resetWindowConfig,
     slaPolicy,
-  } = parseAutoConfig(combo, eligibleTargets);
+    rolePools,
+    judgeTarget,
+  } = parseAutoConfig(combo, eligibleTargets, orderedTargets);
+  // `rolePools.all` is the worker universe. In particular, a Step selected only
+  // as the AI Judger is absent here, so later scoring, continuity, affinity and
+  // fallback stages can never promote the classifier into the final responder.
+  const workerEligibleTargets = rolePools.all;
+  orderedTargets = workerEligibleTargets;
 
   // Per-request overrides (#6023 / #6024 / #6025 / #3470): X-OmniRoute-Budget,
   // X-OmniRoute-Budget-Fallback and X-OmniRoute-Mode headers (threaded via
@@ -250,7 +287,7 @@ export async function resolveAutoStrategyOrder(
   // every fallback under the stale quality-first weights — the same
   // select-under-one-policy/rank-under-another bug this module's original fix
   // (parseAutoConfig honoring the combo's own stored modePack) set out to close.
-  const weights = modePack ? getModePack(modePack) || configWeights : configWeights;
+  const baseWeights = modePack ? getModePack(modePack) || configWeights : configWeights;
   if (
     requestModePack.override ||
     requestBudgetCap !== undefined ||
@@ -284,7 +321,7 @@ export async function resolveAutoStrategyOrder(
         }
       : resilienceSettings;
   const candidates = await buildAutoCandidates(
-    eligibleTargets,
+    workerEligibleTargets,
     combo.name,
     relayOptions?.sessionId,
     resetWindowConfig,
@@ -301,6 +338,79 @@ export async function resolveAutoStrategyOrder(
   const routableCandidates = candidates.filter(
     (candidate) => candidate.quotaCutoffBlocked !== true
   );
+  if (
+    judgeTarget &&
+    adaptiveTask.preferredRole === null &&
+    body._omnirouteInternalRequest !== "adaptive-judge"
+  ) {
+    const judgeVerdict = await runAdaptiveJudge({
+      prompt,
+      target: judgeTarget,
+      cacheScope: combo.id || combo.name,
+      routingContext,
+      handleSingleModel: deps.handleSingleModel,
+      log,
+    });
+    if (judgeVerdict) {
+      adaptiveTask = {
+        complexity: judgeVerdict === "strongReasoning" ? "complex" : "simple",
+        preferredRole: judgeVerdict,
+        signals: [`ai-judge:${judgeTarget.stepId}`],
+      };
+    }
+  }
+  const fastWorkerStepIds = new Set(rolePools.fastWorker.map((target) => target.stepId));
+  const strongReasoningStepIds = new Set(rolePools.strongReasoning.map((target) => target.stepId));
+  const hasFastWorkerPool = fastWorkerStepIds.size > 0;
+  const hasStrongReasoningPool = strongReasoningStepIds.size > 0;
+  for (const candidate of routableCandidates) {
+    candidate.fastWorkerPoolSuitability = hasFastWorkerPool
+      ? fastWorkerStepIds.has(candidate.stepId)
+        ? 1
+        : 0
+      : 1;
+    candidate.strongReasoningPoolSuitability = hasStrongReasoningPool
+      ? strongReasoningStepIds.has(candidate.stepId)
+        ? 1
+        : 0
+      : 1;
+  }
+  const preferredStepIds =
+    adaptiveTask.preferredRole === "fastWorker"
+      ? fastWorkerStepIds
+      : adaptiveTask.preferredRole === "strongReasoning"
+        ? strongReasoningStepIds
+        : null;
+  const preferredPoolHasCandidates =
+    preferredStepIds !== null &&
+    preferredStepIds.size > 0 &&
+    routableCandidates.some((candidate) => preferredStepIds.has(candidate.stepId));
+  const adaptiveRoleActive = adaptiveTask.preferredRole !== null && routableCandidates.length > 0;
+  const configuredRoleWeights =
+    adaptiveTask.preferredRole === "fastWorker"
+      ? roleWeights.fastWorker
+      : adaptiveTask.preferredRole === "strongReasoning"
+        ? roleWeights.strongReasoning
+        : undefined;
+  // An explicit per-request mode remains the highest-priority operator control.
+  // Otherwise a role-specific Advanced profile overrides the Combo's default
+  // mode-pack distribution only while that role is active.
+  const adaptiveBaseWeights =
+    requestModePack.override || !configuredRoleWeights ? baseWeights : configuredRoleWeights;
+  const weights = adaptiveRoleActive
+    ? activateAdaptiveRoleWeight(
+        adaptiveBaseWeights,
+        adaptiveTask.preferredRole,
+        getAdaptiveRoleWeight(
+          modePack,
+          adaptiveTask.preferredRole as "fastWorker" | "strongReasoning"
+        )
+      )
+    : baseWeights;
+  const primaryRulesCandidates =
+    preferredPoolHasCandidates && preferredStepIds
+      ? routableCandidates.filter((candidate) => preferredStepIds.has(candidate.stepId))
+      : routableCandidates;
   const quotaBlockedCount = candidates.length - routableCandidates.length;
   if (quotaBlockedCount > 0) {
     log.info(
@@ -360,12 +470,14 @@ export async function resolveAutoStrategyOrder(
             type: "auto",
             candidatePool,
             weights,
-            modePack,
+            // The effective mode-pack weights are already included above. When
+            // adaptive scoring is active, avoid having the engine replace them.
+            modePack: adaptiveRoleActive ? undefined : modePack,
             budgetCap,
             budgetFallback,
             explorationRate,
           },
-          routableCandidates,
+          primaryRulesCandidates,
           taskType
         );
       } catch (err) {
@@ -380,7 +492,7 @@ export async function resolveAutoStrategyOrder(
       selectedProvider = selection.provider;
       selectedModel = selection.model;
       selectedConnectionId = selection.connectionId ?? null;
-      selectionReason = `score=${selection.score.toFixed(3)}${selection.isExploration ? " (exploration)" : ""}`;
+      selectionReason = `score=${selection.score.toFixed(3)}${selection.isExploration ? " (exploration)" : ""}${adaptiveRoleActive ? ` role-pool=${adaptiveTask.preferredRole}` : ""}`;
     }
 
     // Complexity-aware routing (2026, opt-in): classify the request's
@@ -389,20 +501,36 @@ export async function resolveAutoStrategyOrder(
     const autoManifestHint: RoutingHint | null =
       config.complexityAwareRouting === true
         ? buildComplexityRoutingHint(
-            eligibleTargets.filter((t) => t.kind === "model"),
+            workerEligibleTargets.filter((t) => t.kind === "model"),
             body,
             log
           )
         : null;
 
     const scoredTargets = scoreAutoTargets(
-      eligibleTargets,
+      workerEligibleTargets,
       routableCandidates,
       taskType,
       weights,
       autoManifestHint
     );
-    const rankedTargets = scoredTargets.map((entry) => entry.target);
+    let rankedTargets = scoredTargets.map((entry) => entry.target);
+    if (adaptiveTask.preferredRole) {
+      rankedTargets = buildRolePoolFailoverOrder(
+        {
+          fastWorker: rankedTargets.filter((target) => fastWorkerStepIds.has(target.stepId)),
+          strongReasoning: rankedTargets.filter((target) =>
+            strongReasoningStepIds.has(target.stepId)
+          ),
+          unassigned: rankedTargets.filter(
+            (target) =>
+              !fastWorkerStepIds.has(target.stepId) && !strongReasoningStepIds.has(target.stepId)
+          ),
+          all: rankedTargets,
+        },
+        adaptiveTask.preferredRole
+      );
+    }
     const selectedTarget =
       scoredTargets.find((entry) => {
         const parsed = parseModel(entry.target.modelStr);
@@ -424,23 +552,23 @@ export async function resolveAutoStrategyOrder(
       };
     }
 
-    // Keep eligibleTargets as the last-resort fallback tail: dedupe drops the
+    // Keep workerEligibleTargets as the last-resort fallback tail: dedupe drops the
     // routable ranked ones (and, when the cutoff is OFF, makes this identical to
     // the pre-cutoff behavior), but a quota-blocked target still survives as a
     // final fallback instead of vanishing — the hard cutoff only de-prioritizes.
     orderedTargets = dedupeTargetsByExecutionKey(
-      [selectedTarget, ...rankedTargets, ...eligibleTargets].filter(
+      [selectedTarget, ...rankedTargets, ...workerEligibleTargets].filter(
         (entry): entry is ResolvedComboTarget => entry !== undefined && entry !== null
       )
     );
 
     log.info(
       "COMBO",
-      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} | strategy=${routingStrategy} | ${selectionReason}`
+      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} adaptive=${adaptiveTask.preferredRole || "neutral"} signals=${adaptiveTask.signals.join(",") || "none"} | strategy=${routingStrategy} | ${selectionReason}`
     );
   } else {
     log.warn("COMBO", "Auto strategy has no candidates, keeping default ordering");
   }
 
-  return { orderedTargets, autoUsedExplicitRouter };
+  return { orderedTargets, autoUsedExplicitRouter, adaptiveTask };
 }

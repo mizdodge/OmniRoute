@@ -1,6 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 
+import { DEFAULT_WEIGHTS } from "@omniroute/open-sse/services/autoCombo/scoring.ts";
 import { resolveAutoStrategyOrder } from "@omniroute/open-sse/services/combo/resolveAutoStrategy.ts";
 import { resetDbInstance } from "@/lib/db/core.ts";
 
@@ -270,4 +271,263 @@ test("per-request X-OmniRoute-Mode override changes the EFFECTIVE weights used f
     overridden.orderedTargets.map((t) => t.provider),
     native.orderedTargets.map((t) => t.provider)
   );
+});
+
+const adaptiveTarget = (stepId: string, provider: string) =>
+  ({
+    kind: "model",
+    stepId,
+    executionKey: `${provider}>shared-model`,
+    modelStr: `${provider}/shared-model`,
+    provider,
+    providerId: provider,
+    connectionId: null,
+    weight: 1,
+    label: null,
+  }) as never;
+
+const adaptiveCandidates = () =>
+  ["fast", "strong", "ordinary"].map((provider) => ({
+    kind: "model",
+    stepId: `${provider}-step`,
+    executionKey: `${provider}>shared-model`,
+    modelStr: `${provider}/shared-model`,
+    provider,
+    model: "shared-model",
+    quotaRemaining: 100,
+    quotaTotal: 100,
+    circuitBreakerState: "CLOSED",
+    costPer1MTokens: 1,
+    p95LatencyMs: 100,
+    latencyStdDev: 10,
+    errorRate: 0,
+  })) as never;
+
+function adaptiveDeps(name: string, prompt: string, explorationRate = 0) {
+  return {
+    orderedTargets: [
+      adaptiveTarget("ordinary-step", "ordinary"),
+      adaptiveTarget("strong-step", "strong"),
+      adaptiveTarget("fast-step", "fast"),
+    ],
+    body: { messages: [{ role: "user", content: prompt }] },
+    combo: {
+      id: name,
+      name,
+      autoConfig: {
+        candidatePool: ["fast", "strong", "ordinary"],
+        explorationRate,
+        modePack: "ship-fast",
+        fastWorkerModelRefs: ["fast-step"],
+        strongReasoningModelRefs: ["strong-step"],
+      },
+    },
+    settings: null,
+    config: {},
+    relayOptions: null,
+    resilienceSettings: { quotaPreflight: { enabled: false } },
+    log: noopLog,
+    buildAutoCandidates: (async () => adaptiveCandidates()) as never,
+  } as never;
+}
+
+test("adaptive role scoring selects the semantic role and builds a cross-role fallback tail", async () => {
+  const simple = await resolveAutoStrategyOrder(
+    adaptiveDeps("adaptive-simple-runtime", "what is gravity")
+  );
+  assert.ok("orderedTargets" in simple);
+  if (!("orderedTargets" in simple)) return;
+  assert.deepEqual(
+    simple.orderedTargets.map((entry) => entry.stepId),
+    ["fast-step", "strong-step", "ordinary-step"]
+  );
+
+  const complex = await resolveAutoStrategyOrder(
+    adaptiveDeps("adaptive-complex-runtime", "prove this theorem step by step")
+  );
+  assert.ok("orderedTargets" in complex);
+  if (!("orderedTargets" in complex)) return;
+  assert.deepEqual(
+    complex.orderedTargets.map((entry) => entry.stepId),
+    ["strong-step", "fast-step", "ordinary-step"]
+  );
+});
+
+test("multiple Fast Workers use the Fast Worker Advanced Weight profile", async () => {
+  const model = (stepId: string, provider: string) => adaptiveTarget(stepId, provider);
+  const candidate = (
+    stepId: string,
+    provider: string,
+    costPer1MTokens: number,
+    p95LatencyMs: number
+  ) => ({
+    kind: "model",
+    stepId,
+    executionKey: `${provider}>shared-model`,
+    modelStr: `${provider}/shared-model`,
+    provider,
+    model: "shared-model",
+    quotaRemaining: 100,
+    quotaTotal: 100,
+    circuitBreakerState: "CLOSED",
+    costPer1MTokens,
+    p95LatencyMs,
+    latencyStdDev: 10,
+    errorRate: 0,
+  });
+  const zeroWeights = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((key) => [key, 0]));
+  const result = await resolveAutoStrategyOrder({
+    orderedTargets: [
+      model("speed-step", "speed"),
+      model("cheap-step", "cheap"),
+      model("strong-step", "strong"),
+    ],
+    body: { messages: [{ role: "user", content: "hi" }] },
+    combo: {
+      id: "role-specific-fast-weights",
+      name: "role-specific-fast-weights",
+      autoConfig: {
+        candidatePool: ["speed", "cheap", "strong"],
+        explorationRate: 0,
+        modePack: "ship-fast",
+        fastWorkerModelRefs: ["speed-step", "cheap-step"],
+        strongReasoningModelRefs: ["strong-step"],
+        fastWorkerWeights: { ...zeroWeights, costInv: 1 },
+      },
+    },
+    settings: null,
+    config: {},
+    relayOptions: null,
+    resilienceSettings: { quotaPreflight: { enabled: false } },
+    log: noopLog,
+    buildAutoCandidates: (async () => [
+      candidate("speed-step", "speed", 20, 10),
+      candidate("cheap-step", "cheap", 0.01, 5000),
+      candidate("strong-step", "strong", 1, 100),
+    ]) as never,
+  } as never);
+
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0]?.stepId, "cheap-step");
+  assert.deepEqual(
+    result.orderedTargets.map((entry) => entry.stepId),
+    ["cheap-step", "speed-step", "strong-step"]
+  );
+});
+
+test("an empty role assignment applies the Fast Advanced profile to the general worker pool", async () => {
+  const zeroWeights = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((key) => [key, 0]));
+  const resolve = () =>
+    resolveAutoStrategyOrder({
+      orderedTargets: [
+        adaptiveTarget("speed-step", "general-speed"),
+        adaptiveTarget("cheap-step", "general-cheap"),
+      ],
+      body: { messages: [{ role: "user", content: "hi" }] },
+      combo: {
+        id: "general-fast-weights",
+        name: "general-fast-weights",
+        autoConfig: {
+          candidatePool: ["general-speed", "general-cheap"],
+          explorationRate: 0,
+          fastWorkerWeights: { ...zeroWeights, latencyInv: 1 },
+        },
+      },
+      settings: null,
+      config: {},
+      relayOptions: null,
+      resilienceSettings: { quotaPreflight: { enabled: false } },
+      log: noopLog,
+      buildAutoCandidates: (async () => [
+        {
+          ...adaptiveCandidates()[0],
+          stepId: "speed-step",
+          executionKey: "general-speed>shared-model",
+          modelStr: "general-speed/shared-model",
+          provider: "general-speed",
+          costPer1MTokens: 20,
+          p95LatencyMs: 10,
+        },
+        {
+          ...adaptiveCandidates()[0],
+          stepId: "cheap-step",
+          executionKey: "general-cheap>shared-model",
+          modelStr: "general-cheap/shared-model",
+          provider: "general-cheap",
+          costPer1MTokens: 0.01,
+          p95LatencyMs: 5000,
+        },
+      ]) as never,
+    } as never);
+
+  const result = await resolve();
+
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.deepEqual(
+    result.orderedTargets.map((entry) => entry.stepId),
+    ["speed-step", "cheap-step"]
+  );
+});
+
+test("exploration cannot cross from a routable Fast Worker pool into Strong Reasoning", async (t) => {
+  t.mock.method(Math, "random", () => 0.5);
+
+  const result = await resolveAutoStrategyOrder(
+    adaptiveDeps("adaptive-simple-exploration", "what can you do?", 1)
+  );
+
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.deepEqual(
+    result.orderedTargets.map((entry) => entry.stepId),
+    ["fast-step", "strong-step", "ordinary-step"]
+  );
+});
+
+test("configured AI Judger overrides rules using its one selected Combo Step", async () => {
+  const deps = adaptiveDeps("adaptive-ai-judge", "please classify these items");
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  let judgeCalls = 0;
+  deps.handleSingleModel = (async (body, modelStr, target) => {
+    judgeCalls += 1;
+    assert.equal(modelStr, "ordinary/shared-model");
+    assert.equal(target?.stepId, "ordinary-step");
+    assert.equal(body._omnirouteInternalRequest, "adaptive-judge");
+    return Response.json({ choices: [{ message: { content: "STRONG_REASONING" } }] });
+  }) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.equal(judgeCalls, 1);
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
+  assert.deepEqual(
+    result.orderedTargets.map((entry) => entry.stepId),
+    ["strong-step", "fast-step"],
+    "a judge-only Step must never leak into the final response or fallback chain"
+  );
+});
+
+test("AI Judger is skipped when deterministic rules already choose Fast or Strong", async () => {
+  let judgeCalls = 0;
+  for (const [name, prompt, expected] of [
+    ["fast", "hi", "fast-step"],
+    ["strong", "prove this theorem step by step", "strong-step"],
+  ] as const) {
+    const deps = adaptiveDeps(`judge-skip-${name}`, prompt);
+    deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+    deps.handleSingleModel = (async () => {
+      judgeCalls += 1;
+      return Response.json({ choices: [{ message: { content: "FAST_WORKER" } }] });
+    }) as never;
+
+    const result = await resolveAutoStrategyOrder(deps);
+    assert.ok("orderedTargets" in result);
+    if ("orderedTargets" in result) assert.equal(result.orderedTargets[0]?.stepId, expected);
+  }
+
+  assert.equal(judgeCalls, 0);
 });

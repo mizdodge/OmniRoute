@@ -34,6 +34,7 @@ import { orderTargetsByEvalScores } from "../evalRouting.ts";
 import { parseModel } from "../model.ts";
 import { isProviderInCooldown } from "../providerCooldownTracker.ts";
 import {
+  alignTaskWithAdaptiveRole,
   classifyTask,
   getConversationCacheKey,
   isTaskRoutingStrategy,
@@ -67,6 +68,7 @@ import {
 } from "./providerWildcard.ts";
 import { preScreenTargets, type PreScreenResult } from "./quotaStrategies.ts";
 import { resolveAutoStrategyOrder, type ResolveAutoStrategyDeps } from "./resolveAutoStrategy.ts";
+import type { AdaptiveTaskClassification } from "../autoCombo/taskClassification.ts";
 import {
   MAX_RR_COUNTERS,
   clampStickyWeightedTargetLimit,
@@ -435,7 +437,11 @@ async function orderByStrategy(
   initialOrderedTargets: ResolvedComboTarget[]
 ): Promise<
   | { earlyResponse: Response }
-  | { orderedTargets: ResolvedComboTarget[]; autoUsedExplicitRouter: boolean }
+  | {
+      orderedTargets: ResolvedComboTarget[];
+      autoUsedExplicitRouter: boolean;
+      adaptiveTask?: AdaptiveTaskClassification;
+    }
 > {
   const { strategy, body, combo, settings, config, log } = deps;
   if (strategy === "auto") {
@@ -449,11 +455,13 @@ async function orderByStrategy(
       resilienceSettings: deps.resilienceSettings,
       log,
       buildAutoCandidates: deps.buildAutoCandidates,
+      handleSingleModel: deps.handleSingleModelWithTimeout,
     });
     if ("earlyResponse" in autoResult) return { earlyResponse: autoResult.earlyResponse };
     return {
       orderedTargets: autoResult.orderedTargets,
       autoUsedExplicitRouter: autoResult.autoUsedExplicitRouter,
+      adaptiveTask: autoResult.adaptiveTask,
     };
   }
   const orderedTargets = await applyStrategyOrdering(strategy, initialOrderedTargets, {
@@ -579,28 +587,42 @@ async function applyContinuityFilters(
 function applyTaskAwareOrdering(
   deps: ResolveComboTargetPipelineDeps,
   orderedTargets: ResolvedComboTarget[],
-  autoUsedExplicitRouter: boolean
+  autoUsedExplicitRouter: boolean,
+  adaptiveTask?: AdaptiveTaskClassification
 ): ResolvedComboTarget[] {
   const { strategy, body, log } = deps;
   if (!isTaskRoutingStrategy(strategy)) return orderedTargets;
-  const task = classifyTask(body);
+  const legacyTask = classifyTask(body);
+  const task =
+    strategy === "auto"
+      ? alignTaskWithAdaptiveRole(legacyTask, adaptiveTask?.preferredRole ?? null)
+      : legacyTask;
   const conversationCacheKey = getConversationCacheKey(body);
   const taskReordered = reorderByTaskWeight(orderedTargets, task);
-  // #4945 regression guard: when an explicit auto router (lkgp/cost/…) pinned
-  // orderedTargets[0], keep that primary choice and let task-aware refine only
-  // the fallback tail — otherwise task weighting silently defeats the operator's
-  // chosen LKGP/cost selection. reorderByTaskWeight returns the same target
-  // objects (no clone), so identity filtering is safe.
-  const pinnedFirst = autoUsedExplicitRouter ? orderedTargets[0] : undefined;
+  // Auto has already classified and scored the request before this legacy layer.
+  // Keep its primary choice for both the rules router and explicit sub-routers;
+  // task-aware routing may refine only the fallback tail. Otherwise structural
+  // client metadata (for example, many advertised IDE tools plus a large system
+  // prompt) can silently replace an adaptive Fast Worker selection with Ultra.
+  // reorderByTaskWeight returns the same target objects, so identity filtering is safe.
+  const preserveAutoPrimary = strategy === "auto" || autoUsedExplicitRouter;
+  const pinnedFirst = preserveAutoPrimary ? orderedTargets[0] : undefined;
   const nextOrder = pinnedFirst
     ? [pinnedFirst, ...taskReordered.filter((t) => t !== pinnedFirst)]
     : taskReordered;
-  if (nextOrder[0]?.modelStr !== orderedTargets[0]?.modelStr) {
+  if (nextOrder.length > 0) {
     const reasons =
       Array.isArray(task.reasons) && task.reasons.length > 0 ? ` (${task.reasons.join(",")})` : "";
+    const scope = pinnedFirst ? "fallback-only" : "primary-and-fallback";
+    const primary = nextOrder[0]?.modelStr ?? "none";
+    const fallbacks = nextOrder
+      .slice(1)
+      .map((target) => target.modelStr)
+      .join(",");
     log.info(
       "COMBO",
-      `task-route task=${task.level}${reasons} cacheKey=${conversationCacheKey ?? "none"} → ${nextOrder[0]?.modelStr}`
+      `task-route task=${task.level}${reasons} scope=${scope} primary=${primary} ` +
+        `fallbacks=${fallbacks || "none"} cacheKey=${conversationCacheKey ?? "none"}`
     );
   }
   return nextOrder;
@@ -679,9 +701,9 @@ async function applyPromptCacheStage(
 
   // Determine affinity scope: restrict to model-level for deterministic strategies
   // to preserve operator-defined model order; keep global for cross-model
-  // strategies. Per #8370, lkgp/auto/cache-optimized explicitly support promoting
-  // a previously-successful model ahead of the declared order, so they must stay
-  // cross-model ("global") rather than be locked into a single model step.
+  // strategies. LKGP/Auto/cache-optimized keep global affinity so fallback models
+  // can move across the tail; the primary protection below re-pins the strategy's
+  // selected first target when required.
   const modelOrderPreservingStrategies = new Set<string>([
     "priority",
     "weighted",
@@ -758,11 +780,16 @@ export async function resolveComboTargetPipeline(
 
   const ordering = await orderByStrategy(deps, orderedTargets);
   if ("earlyResponse" in ordering) return ordering;
-  const { autoUsedExplicitRouter } = ordering;
+  const { autoUsedExplicitRouter, adaptiveTask } = ordering;
 
   const continuity = await applyContinuityFilters(deps, ordering.orderedTargets);
   if ("earlyResponse" in continuity) return continuity;
-  orderedTargets = applyTaskAwareOrdering(deps, continuity.orderedTargets, autoUsedExplicitRouter);
+  orderedTargets = applyTaskAwareOrdering(
+    deps,
+    continuity.orderedTargets,
+    autoUsedExplicitRouter,
+    adaptiveTask
+  );
   orderedTargets = await applyPromptCacheStage(
     deps,
     orderedTargets,

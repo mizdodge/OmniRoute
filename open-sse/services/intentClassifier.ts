@@ -16,6 +16,103 @@ export interface ClassificationResult {
   signals: string[];
 }
 
+const USER_REQUEST_TAG_NAMES = [
+  "userRequest",
+  "user_request",
+  "user-query",
+  "user_query",
+  "actualUserRequest",
+] as const;
+
+const CLIENT_METADATA_TAG_NAMES = [
+  "environment_info",
+  "workspace_info",
+  "userMemory",
+  "sessionMemory",
+  "repoMemory",
+  "context",
+  "editorContext",
+  "reminderInstructions",
+] as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type IntentSearchSpace = {
+  raw: string;
+  asciiWords: string;
+};
+
+function buildIntentSearchSpace(text: string): IntentSearchSpace {
+  const raw = text.toLowerCase();
+  const words = raw
+    .replace(/[^\p{L}\p{N}_]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return { raw, asciiWords: ` ${words} ` };
+}
+
+function containsIntentKeyword(search: IntentSearchSpace, keyword: string): boolean {
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  if (!normalizedKeyword) return false;
+
+  // Latin/ASCII keywords such as `api`, `class`, and `var` must not match
+  // inside ordinary words like `capital`, `classification`, or `various`.
+  // Non-Latin keywords retain substring matching because languages such as
+  // Chinese and Japanese do not consistently separate words with spaces.
+  const usesAsciiWordBoundaries = /^[a-z0-9_]+(?:\s+[a-z0-9_]+)*$/.test(normalizedKeyword);
+  if (!usesAsciiWordBoundaries) return search.raw.includes(normalizedKeyword);
+  return search.asciiWords.includes(` ${normalizedKeyword.replace(/\s+/g, " ")} `);
+}
+
+function findLastTaggedValue(text: string, tagNames: readonly string[]): string | null {
+  let latestIndex = -1;
+  let latestValue: string | null = null;
+
+  for (const tagName of tagNames) {
+    const escapedTag = escapeRegExp(tagName);
+    const pattern = new RegExp(`<${escapedTag}\\b[^>]*>([\\s\\S]*?)<\\/${escapedTag}\\s*>`, "gi");
+    for (const match of text.matchAll(pattern)) {
+      const value = match[1]?.trim();
+      if (value && (match.index ?? -1) > latestIndex) {
+        latestIndex = match.index ?? -1;
+        latestValue = value;
+      }
+    }
+  }
+
+  return latestValue;
+}
+
+/**
+ * Reduce IDE/client envelopes to the actual human request while leaving an
+ * ordinary chat message byte-for-byte intact. Explicit request tags win; known
+ * metadata blocks are stripped only when an envelope is detected.
+ */
+export function extractUserRequestFromClientEnvelope(text: string): string {
+  if (typeof text !== "string" || text.length === 0) return "";
+
+  const taggedRequest = findLastTaggedValue(text, USER_REQUEST_TAG_NAMES);
+  if (taggedRequest !== null) return taggedRequest;
+
+  const hasClientMetadata = CLIENT_METADATA_TAG_NAMES.some((tagName) => {
+    const escapedTag = escapeRegExp(tagName);
+    return new RegExp(`<${escapedTag}\\b`, "i").test(text);
+  });
+  if (!hasClientMetadata) return text;
+
+  let cleaned = text;
+  for (const tagName of CLIENT_METADATA_TAG_NAMES) {
+    const escapedTag = escapeRegExp(tagName);
+    cleaned = cleaned.replace(
+      new RegExp(`<${escapedTag}\\b[^>]*>[\\s\\S]*?<\\/${escapedTag}\\s*>`, "gi"),
+      " "
+    );
+  }
+  return cleaned.trim();
+}
+
 export const CODE_KEYWORDS: readonly string[] = [
   // English
   "function",
@@ -532,6 +629,9 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
   "list",
   "tell me",
   "who is",
+  "how are you",
+  "what can you do",
+  "who are you",
   // Português (PT-BR)
   "o que é",
   "definir",
@@ -592,24 +692,29 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
  * Priority: code > math > reasoning > creative > simple > medium (default)
  */
 export function classifyPromptIntent(prompt: string, systemPrompt?: string): IntentType {
-  const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
-  const wordCount = prompt.trim().split(/\s+/).length;
+  // Intent belongs to the human request. IDE/system instructions describe the
+  // client and available capabilities, not what the user is asking right now.
+  void systemPrompt;
+  const userPrompt = extractUserRequestFromClientEnvelope(prompt);
+  const search = buildIntentSearchSpace(userPrompt);
+  const wordCount = userPrompt.trim().split(/\s+/).length;
 
   for (const kw of CODE_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "code";
+    if (containsIntentKeyword(search, kw)) return "code";
   }
   for (const kw of MATH_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "math";
+    if (containsIntentKeyword(search, kw)) return "math";
   }
   for (const kw of REASONING_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "reasoning";
+    if (containsIntentKeyword(search, kw)) return "reasoning";
   }
   for (const kw of CREATIVE_KEYWORDS) {
-    if (fullText.includes(kw.toLowerCase())) return "creative";
+    if (containsIntentKeyword(search, kw)) return "creative";
   }
   if (wordCount < 60) {
+    if (["hi", "hey", "hello"].includes(search.raw.trim())) return "simple";
     for (const kw of SIMPLE_KEYWORDS) {
-      if (fullText.includes(kw.toLowerCase())) return "simple";
+      if (containsIntentKeyword(search, kw)) return "simple";
     }
   }
   return "medium";
@@ -636,8 +741,10 @@ export function classifyWithConfig(
   systemPrompt?: string
 ): IntentType {
   if (!config.enabled) return "medium";
-  const fullText = `${systemPrompt ?? ""} ${prompt}`.toLowerCase();
-  const wordCount = prompt.trim().split(/\s+/).length;
+  void systemPrompt;
+  const userPrompt = extractUserRequestFromClientEnvelope(prompt);
+  const search = buildIntentSearchSpace(userPrompt);
+  const wordCount = userPrompt.trim().split(/\s+/).length;
   const maxSimpleWords = config.simpleMaxWords ?? 60;
   const codeKws = [...CODE_KEYWORDS, ...(config.extraCodeKeywords ?? [])];
   const mathKws = [...MATH_KEYWORDS, ...(config.extraMathKeywords ?? [])];
@@ -645,20 +752,21 @@ export function classifyWithConfig(
   const creativeKws = [...CREATIVE_KEYWORDS, ...(config.extraCreativeKeywords ?? [])];
   const simpleKws = [...SIMPLE_KEYWORDS, ...(config.extraSimpleKeywords ?? [])];
   for (const kw of codeKws) {
-    if (fullText.includes(kw.toLowerCase())) return "code";
+    if (containsIntentKeyword(search, kw)) return "code";
   }
   for (const kw of mathKws) {
-    if (fullText.includes(kw.toLowerCase())) return "math";
+    if (containsIntentKeyword(search, kw)) return "math";
   }
   for (const kw of reasoningKws) {
-    if (fullText.includes(kw.toLowerCase())) return "reasoning";
+    if (containsIntentKeyword(search, kw)) return "reasoning";
   }
   for (const kw of creativeKws) {
-    if (fullText.includes(kw.toLowerCase())) return "creative";
+    if (containsIntentKeyword(search, kw)) return "creative";
   }
   if (wordCount < maxSimpleWords) {
+    if (["hi", "hey", "hello"].includes(search.raw.trim())) return "simple";
     for (const kw of simpleKws) {
-      if (fullText.includes(kw.toLowerCase())) return "simple";
+      if (containsIntentKeyword(search, kw)) return "simple";
     }
   }
   return "medium";

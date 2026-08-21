@@ -287,6 +287,25 @@ export function classifyTask(body: Record<string, unknown>): TaskClassification 
   };
 }
 
+/**
+ * Auto's front classifier owns reasoning complexity. Preserve raw size/output
+ * fields for capability-fit fallback scoring, but do not let accumulated
+ * history or advertised tools independently change the chosen role.
+ */
+export function alignTaskWithAdaptiveRole(
+  task: TaskClassification,
+  preferredRole: "fastWorker" | "strongReasoning" | null
+): TaskClassification {
+  if (!preferredRole) return task;
+  const level: TaskLevel = preferredRole === "strongReasoning" ? "heavy" : "light";
+  return {
+    ...task,
+    level,
+    weight: taskWeight(level),
+    reasons: [`adaptive-role:${preferredRole}`],
+  };
+}
+
 // ── Model power scoring ───────────────────────────────────────────────────────
 
 /**

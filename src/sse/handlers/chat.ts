@@ -333,7 +333,11 @@ function isManagedComboUnsupported(
 
 const managedComboRejection = () =>
   buildManagedLeaseErrorResponse(
-    new LeaseContextError(409, "LEASE_UNSUPPORTED_ROUTE", "Managed leases do not support this route")
+    new LeaseContextError(
+      409,
+      "LEASE_UNSUPPORTED_ROUTE",
+      "Managed leases do not support this route"
+    )
   );
 
 const comboPromoteDeps = { updateCombo, info: log.info, warn: log.warn };
@@ -1775,7 +1779,11 @@ async function handleSingleModelChat(
           ...(workspaceId ? { workspaceId } : {}),
         });
       }
-      if (runtimeOptions.sessionId && body?._omnirouteInternalRequest !== "context-handoff") {
+      if (
+        runtimeOptions.sessionId &&
+        body?._omnirouteInternalRequest !== "context-handoff" &&
+        body?._omnirouteSkipContextRelay !== true
+      ) {
         touchSession(runtimeOptions.sessionId, credentials.connectionId);
         startQuotaMonitor(
           runtimeOptions.sessionId,
@@ -1818,7 +1826,8 @@ async function handleSingleModelChat(
             comboStrategy,
             isCombo,
             comboStepId: runtimeOptions.comboStepId ?? null,
-            comboExecutionKey: runtimeOptions.comboExecutionKey ?? runtimeOptions.comboStepId ?? null,
+            comboExecutionKey:
+              runtimeOptions.comboExecutionKey ?? runtimeOptions.comboStepId ?? null,
             extendedContext,
             modelApiFormat: apiFormat,
             modelTargetFormat: targetFormat,

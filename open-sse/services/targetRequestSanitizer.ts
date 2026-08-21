@@ -11,6 +11,10 @@ import { stripUnsupportedParams } from "../translator/paramSupport.ts";
 import { sanitizeReasoningEffortForProvider } from "../executors/base/reasoningEffort.ts";
 
 type JsonRecord = Record<string, unknown>;
+const INTERNAL_CONTROL_FIELDS = [
+  "_omnirouteInternalRequest",
+  "_omnirouteSkipContextRelay",
+] as const;
 type LoggerLike =
   | {
       debug?: (tag: string, message: string) => void;
@@ -62,6 +66,15 @@ export function sanitizeRequestForResolvedTarget<T extends JsonRecord>(
 ): T {
   let next = { ...body } as T;
   const stripped = stripVerbosityForTarget(next, options.model);
+
+  // Context Relay consumes these controls inside OmniRoute before this final
+  // dispatch boundary. They are not part of any provider protocol and strict
+  // upstreams (for example NVIDIA NIM) reject them with HTTP 400.
+  for (const field of INTERNAL_CONTROL_FIELDS) {
+    if (!Object.hasOwn(next, field)) continue;
+    delete next[field];
+    stripped.push(field);
+  }
 
   // Keep reasoning intent, but normalize its effort vocabulary for the
   // concrete provider/model selected by routing (for example xhigh → high on

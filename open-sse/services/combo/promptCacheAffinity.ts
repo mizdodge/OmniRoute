@@ -280,7 +280,9 @@ export function expandPromptCacheAffinityTargetsFromConnections(
  * reorder must not silently override, even though affinity is still free to
  * pick among the remaining/fallback targets. `quota-share` and `weighted`
  * were already protected before this fix; session stickiness and an explicit
- * auto-router pin remain independently protected via their own flags.
+ * auto-router pin remain independently protected via their own flags. Auto is
+ * also protected because its scorer has already selected the request's primary;
+ * affinity may still reorder the fallback tail.
  */
 export function shouldProtectOriginalFirst(
   stickyStuck: boolean,
@@ -294,7 +296,8 @@ export function shouldProtectOriginalFirst(
     strategy === "weighted" ||
     strategy === "priority" ||
     strategy === "fill-first" ||
-    strategy === "lkgp"
+    strategy === "lkgp" ||
+    strategy === "auto"
   );
 }
 

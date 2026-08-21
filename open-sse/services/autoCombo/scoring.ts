@@ -23,6 +23,10 @@ export interface ScoringFactors {
   sessionAvailability?: number;
   resetWindowAffinity: number;
   connectionDensity: number;
+  /** Request-aware suitability for a configured Fast Worker combo step. */
+  fastWorkerPoolSuitability?: number;
+  /** Request-aware suitability for a configured Strong Reasoning combo step. */
+  strongReasoningPoolSuitability?: number;
 }
 
 export interface ScoringWeights {
@@ -40,6 +44,8 @@ export interface ScoringWeights {
   sessionAvailability?: number;
   resetWindowAffinity: number;
   connectionDensity: number;
+  fastWorkerPoolSuitability?: number;
+  strongReasoningPoolSuitability?: number;
 }
 
 export const DEFAULT_WEIGHTS: ScoringWeights = {
@@ -57,7 +63,45 @@ export const DEFAULT_WEIGHTS: ScoringWeights = {
   sessionAvailability: 0.0476,
   resetWindowAffinity: 0,
   connectionDensity: 0.0476,
+  fastWorkerPoolSuitability: 0,
+  strongReasoningPoolSuitability: 0,
 };
+
+export type AdaptiveScoringRole = "fastWorker" | "strongReasoning";
+
+/**
+ * Reserve part of an existing normalized scoring distribution for the request's
+ * preferred adaptive role. The inactive role remains neutral, and a null role is
+ * byte-for-byte equivalent at the factor level to ordinary Auto-Combo scoring.
+ */
+export function activateAdaptiveRoleWeight(
+  weights: ScoringWeights,
+  preferredRole: AdaptiveScoringRole | null,
+  requestedWeight: number
+): ScoringWeights {
+  const normalized = normalizeScoringWeights(weights);
+  if (!preferredRole || !Number.isFinite(requestedWeight) || requestedWeight <= 0) {
+    return normalized;
+  }
+
+  const roleWeight = Math.min(0.5, requestedWeight);
+  const baseScale = 1 - roleWeight;
+  const adjusted = Object.fromEntries(
+    Object.entries(normalized).map(([key, value]) => {
+      if (key === "fastWorkerPoolSuitability" || key === "strongReasoningPoolSuitability") {
+        return [key, 0];
+      }
+      return [key, Number(value) * baseScale];
+    })
+  ) as unknown as ScoringWeights;
+
+  if (preferredRole === "fastWorker") {
+    adjusted.fastWorkerPoolSuitability = roleWeight;
+  } else {
+    adjusted.strongReasoningPoolSuitability = roleWeight;
+  }
+  return adjusted;
+}
 
 /** Normalize independently configured UI weights into a scoring distribution. */
 export function normalizeScoringWeights(
@@ -109,6 +153,8 @@ export interface ProviderCandidate {
   resetWindowAffinity?: number;
   connectionPoolSize?: number;
   connectionId?: string;
+  fastWorkerPoolSuitability?: number;
+  strongReasoningPoolSuitability?: number;
 }
 
 export interface ScoredProvider {
@@ -141,7 +187,9 @@ export function calculateScore(factors: ScoringFactors, weights: ScoringWeights)
       (weights.cacheAffinity ?? 0) * (factors.cacheAffinity ?? 0) +
       (weights.sessionAvailability ?? 0) * (factors.sessionAvailability ?? 1) +
       (weights.resetWindowAffinity ?? 0) * factors.resetWindowAffinity +
-      (weights.connectionDensity ?? 0) * factors.connectionDensity
+      (weights.connectionDensity ?? 0) * factors.connectionDensity +
+      (weights.fastWorkerPoolSuitability ?? 0) * (factors.fastWorkerPoolSuitability ?? 0) +
+      (weights.strongReasoningPoolSuitability ?? 0) * (factors.strongReasoningPoolSuitability ?? 0)
   );
 }
 
@@ -268,6 +316,8 @@ export function calculateFactors(
     sessionAvailability: clamp01(candidate.sessionAvailability ?? 1),
     resetWindowAffinity: clamp01(candidate.resetWindowAffinity ?? 0.5),
     connectionDensity: clamp01(((candidate.connectionPoolSize ?? 1) - 1) / 10),
+    fastWorkerPoolSuitability: clamp01(candidate.fastWorkerPoolSuitability ?? 0),
+    strongReasoningPoolSuitability: clamp01(candidate.strongReasoningPoolSuitability ?? 0),
   };
 }
 

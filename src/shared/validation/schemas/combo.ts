@@ -198,7 +198,12 @@ export const comboRuntimeConfigSchema = z
     predictiveTtftMs: z.coerce.number().int().min(0).max(300000).optional(),
     // Auto-Combo / LKGP Extensions
     candidatePool: z.array(z.string().min(1)).optional(),
+    fastWorkerModelRefs: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
+    strongReasoningModelRefs: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
+    adaptiveJudgeModelRef: z.string().trim().min(1).max(200).optional(),
     weights: scoringWeightsSchema.optional(),
+    fastWorkerWeights: scoringWeightsSchema.optional(),
+    strongReasoningWeights: scoringWeightsSchema.optional(),
     modePack: z.string().max(100).optional(),
     budgetCap: z.number().positive().optional(),
     explorationRate: z.number().min(0).max(1).optional(),

@@ -408,11 +408,6 @@
       "count": 1
     }
   },
-  "src/app/api/combos/route.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/api/combos/test/route.ts": {
     "no-restricted-imports": {
       "count": 1

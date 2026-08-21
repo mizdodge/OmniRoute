@@ -257,6 +257,7 @@ import {
 } from "./combo/quotaExhaustionCutoff.ts";
 import { expandTargetsByFingerprints } from "./combo/fingerprintExpansion.ts";
 import { resolveComboTargetPipeline } from "./combo/targetResolution.ts";
+import { buildRolePoolFailoverOrder, resolveRolePoolCandidates } from "./combo/rolePools.ts";
 import {
   isQuotaExhaustionResponse,
   recordQuotaExhaustionClassification,
@@ -265,6 +266,7 @@ import {
 
 export { RESET_WINDOW_NAMES, QUOTA_SOFT_DEPRIORITIZE_FACTOR, setCandidateQuotaSoftPenalty };
 export { scoreAutoTargets, expandAutoComboCandidatePool };
+export { buildRolePoolFailoverOrder, resolveRolePoolCandidates };
 export type { SingleModelTarget, ResolvedComboTarget };
 export { validateResponseQuality };
 export {

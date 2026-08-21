@@ -115,6 +115,155 @@ test("an empty combo yields an empty target pool (combo.ts turns it into a 404)"
   assert.deepEqual(result.orderedTargets, []);
 });
 
+test("auto keeps its adaptive primary when legacy task routing sees many advertised tools", async () => {
+  const lightning = "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b";
+  const ultra = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+  const infoMessages: string[] = [];
+  const result = await resolveComboTargetPipeline(
+    deps({
+      log: {
+        ...noopLog,
+        info(_tag: unknown, message: unknown) {
+          infoMessages.push(String(message));
+        },
+      },
+      strategy: "auto",
+      combo: {
+        id: "adaptive-primary-authority",
+        name: "adaptive-primary-authority",
+        models: [
+          { id: "lightning-step", model: lightning },
+          { id: "ultra-step", model: ultra },
+        ],
+        autoConfig: {
+          candidatePool: ["nvidia"],
+          explorationRate: 0,
+          modePack: "ship-fast",
+          fastWorkerModelRefs: ["lightning-step"],
+          strongReasoningModelRefs: ["ultra-step"],
+        },
+      },
+      config: { compatFilterFailOpen: true },
+      body: {
+        messages: [
+          { role: "system", content: "IDE metadata ".repeat(1_500) },
+          { role: "user", content: "hi" },
+        ],
+        tools: Array.from({ length: 58 }, (_, index) => ({
+          type: "function",
+          function: { name: `tool_${index}`, parameters: { type: "object" } },
+        })),
+      },
+      buildAutoCandidates: async (targets: Array<Record<string, unknown>>) =>
+        targets.map((target) => {
+          const modelStr = String(target.modelStr);
+          const separator = modelStr.indexOf("/");
+          return {
+            ...target,
+            model: separator >= 0 ? modelStr.slice(separator + 1) : modelStr,
+            quotaRemaining: 100,
+            quotaTotal: 100,
+            circuitBreakerState: "CLOSED",
+            costPer1MTokens: 1,
+            p95LatencyMs: 100,
+            latencyStdDev: 10,
+            errorRate: 0,
+          };
+        }),
+    })
+  );
+
+  assert.ok(!("earlyResponse" in result));
+  if ("earlyResponse" in result) return;
+  assert.equal(
+    result.orderedTargets[0]?.modelStr,
+    lightning,
+    "legacy many-tools-large-context routing must not replace Auto's selected primary"
+  );
+  assert.equal(result.orderedTargets[1]?.modelStr, ultra, "Ultra remains the first fallback");
+  const taskRouteLog = infoMessages.find((message) => message.startsWith("task-route "));
+  assert.ok(
+    taskRouteLog,
+    `expected task-route observability log, got: ${infoMessages.join(" | ")}`
+  );
+  assert.match(
+    taskRouteLog,
+    new RegExp(
+      `^task-route task=light \\(adaptive-role:fastWorker\\) scope=fallback-only ` +
+        `primary=${lightning} fallbacks=${ultra} cacheKey=[a-f0-9]+$`
+    )
+  );
+});
+
+test("task-route cannot override a Fast profile primary selected from the general pool", async () => {
+  const lightning = "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b";
+  const ultra = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+  const zeroWeights = {
+    quota: 0,
+    health: 0,
+    costInv: 0,
+    latencyInv: 1,
+    taskFit: 0,
+    stability: 0,
+    tierPriority: 0,
+    tierAffinity: 0,
+    specificityMatch: 0,
+    contextAffinity: 0,
+    cacheAffinity: 0,
+    sessionAvailability: 0,
+    resetWindowAffinity: 0,
+    connectionDensity: 0,
+    fastWorkerPoolSuitability: 0,
+    strongReasoningPoolSuitability: 0,
+  };
+  const result = await resolveComboTargetPipeline(
+    deps({
+      strategy: "auto",
+      combo: {
+        id: "general-primary-authority",
+        name: "general-primary-authority",
+        models: [
+          { id: "lightning-step", model: lightning },
+          { id: "ultra-step", model: ultra },
+        ],
+        autoConfig: {
+          candidatePool: ["nvidia"],
+          explorationRate: 0,
+          fastWorkerWeights: zeroWeights,
+        },
+      },
+      config: { compatFilterFailOpen: true },
+      body: {
+        messages: [
+          { role: "system", content: "IDE metadata ".repeat(1_500) },
+          { role: "user", content: "hi" },
+        ],
+        tools: Array.from({ length: 58 }, (_, index) => ({
+          type: "function",
+          function: { name: `tool_${index}`, parameters: { type: "object" } },
+        })),
+      },
+      buildAutoCandidates: async (targets: Array<Record<string, unknown>>) =>
+        targets.map((target) => ({
+          ...target,
+          model: String(target.modelStr).split("/").slice(1).join("/"),
+          quotaRemaining: 100,
+          quotaTotal: 100,
+          circuitBreakerState: "CLOSED",
+          costPer1MTokens: 1,
+          p95LatencyMs: String(target.stepId) === "lightning-step" ? 10 : 5000,
+          latencyStdDev: 10,
+          errorRate: 0,
+        })),
+    })
+  );
+
+  assert.ok(!("earlyResponse" in result));
+  if ("earlyResponse" in result) return;
+  assert.equal(result.orderedTargets[0]?.modelStr, lightning);
+  assert.equal(result.orderedTargets[1]?.modelStr, ultra);
+});
+
 test("request exceeding every known context window returns a 400 earlyResponse", async () => {
   saveModelsDevCapabilities({
     "unit-target-resolution": {
