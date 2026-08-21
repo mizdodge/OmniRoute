@@ -773,3 +773,36 @@ Status: Completed
 - Added unit regression coverage for authoritative removal while preserving unrelated Combo config
   and the other role's independent custom profile. The existing browser flow now also asserts the
   reset, inherited UI, default slider restoration, and omitted save payload.
+
+### Post-Phase 5 — Categorized Adaptive Fallback Pools
+
+Status: Implemented; runtime validation pending
+
+- Fixed the reported cross-pool fallback leak by making the adaptive fallback chain explicitly
+  categorized. Each resolved target carries request-local worker membership and fallback-tier
+  metadata; no provider/model capability inference is used.
+- Fallback precedence is now authoritative and classifier-driven:
+  - Strong Reasoning request: Strong Reasoning → Fast Worker → General/unassigned.
+  - Fast Worker request: Fast Worker → Strong Reasoning → General/unassigned.
+- `task-route` may still rank models by task fit, but only inside the current adaptive fallback
+  tier. It cannot promote a later worker pool or General model ahead of an earlier tier.
+- Prompt-cache affinity obeys the same tier boundary, preventing the post-task-routing cache stage
+  from reintroducing cross-pool fallback jumps.
+- General/unassigned models are the final safety pool. Overlapping Fast/Strong membership is
+  deduplicated by execution key and consumed in the first applicable tier.
+- Added focused regression coverage in
+  `tests/unit/adaptive-task-routing-pool-boundaries.test.ts` for Strong→Fast→General,
+  Fast→Strong→General, task-route tier isolation, and prompt-cache tier isolation.
+- Task-routing INFO logs now expose categorized fallback models as
+  `fallbackPools=<role>:[...] > <role>:[...] > general:[...]`; non-adaptive task-aware routes retain
+  the legacy flat `fallbacks=...` format.
+
+#### Validation
+
+- Regression tests were added for the four pool-boundary behaviors above.
+- The repository `Build App` GitHub workflow is configured for pushes to every branch, so these
+  commits automatically request a production build on `codex/adaptive-routing`.
+- This ChatGPT GitHub connection does not expose a command runner or workflow-dispatch/run-list API,
+  so the Node/Vitest/typecheck/lint commands recorded elsewhere in this file have not been
+  re-executed from this session yet. Do not treat this subsection as a green runtime validation
+  until the branch build or a local checkout reports the results.
