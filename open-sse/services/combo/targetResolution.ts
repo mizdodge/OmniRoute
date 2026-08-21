@@ -615,14 +615,31 @@ function applyTaskAwareOrdering(
       Array.isArray(task.reasons) && task.reasons.length > 0 ? ` (${task.reasons.join(",")})` : "";
     const scope = pinnedFirst ? "fallback-only" : "primary-and-fallback";
     const primary = nextOrder[0]?.modelStr ?? "none";
-    const fallbacks = nextOrder
-      .slice(1)
-      .map((target) => target.modelStr)
-      .join(",");
+    const fallbackTargets = nextOrder.slice(1);
+    const flatFallbacks = fallbackTargets.map((target) => target.modelStr).join(",");
+    const fallbackGroups = new Map<string, string[]>();
+    const fallbackGroupOrder: string[] = [];
+    for (const target of fallbackTargets) {
+      const fallbackClass = (
+        target as ResolvedComboTarget & { _omnirouteAdaptiveFallbackClass?: unknown }
+      )._omnirouteAdaptiveFallbackClass;
+      if (typeof fallbackClass !== "string" || !fallbackClass) continue;
+      if (!fallbackGroups.has(fallbackClass)) {
+        fallbackGroups.set(fallbackClass, []);
+        fallbackGroupOrder.push(fallbackClass);
+      }
+      fallbackGroups.get(fallbackClass)!.push(target.modelStr);
+    }
+    const categorizedFallbacks = fallbackGroupOrder
+      .map((fallbackClass) => `${fallbackClass}:[${fallbackGroups.get(fallbackClass)!.join(",")}]`)
+      .join(" > ");
+    const fallbackLog = categorizedFallbacks
+      ? `fallbackPools=${categorizedFallbacks}`
+      : `fallbacks=${flatFallbacks || "none"}`;
     log.info(
       "COMBO",
       `task-route task=${task.level}${reasons} scope=${scope} primary=${primary} ` +
-        `fallbacks=${fallbacks || "none"} cacheKey=${conversationCacheKey ?? "none"}`
+        `${fallbackLog} cacheKey=${conversationCacheKey ?? "none"}`
     );
   }
   return nextOrder;
