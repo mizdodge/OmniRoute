@@ -707,15 +707,17 @@ additional model call.
 simple + no complex signal         → Fast Worker
 light coding                        → Fast Worker
 heavy coding                        → Strong Reasoning
-ambiguous coding                    → neutral / optional AI Intent Classifier
+ambiguous coding                    → neutral / router scoring first; optional AI tie-breaker only if still neutral
 math | reasoning                    → Strong Reasoning
 explicit tool choice                → Strong Reasoning for a new user request
 estimated input >= 2,000 tokens     → Strong Reasoning
 medium | creative without signals   → neutral
 ```
 
-Neutral is deliberate: an ambiguous request does not receive a role boost and follows existing
-Auto-Combo scoring. Complex signals override a nominally simple intent.
+Neutral is deliberate: an ambiguous request first follows existing Auto-Combo scoring with the
+effective base weights and no adaptive role boost. If that scoring has a unique Fast or Strong
+winner, the role is resolved locally. Only a role-neutral top result can reach the optional AI
+classifier, and only when both role pools have routable candidates.
 
 ### Role-Aware Score
 
@@ -864,17 +866,28 @@ unsupported-parameter 400 while preserving the flags inside OmniRoute's own pipe
 
 ## Optional AI Intent Classifier
 
-Adaptive Routing can now delegate the Fast Worker versus Strong Reasoning decision to one selected
+Adaptive Routing can delegate the Fast Worker versus Strong Reasoning decision to one selected
 model Step through `adaptiveJudgeModelRef`. The value is a single stable Step ID, not an arbitrary
 model string or an array. The Builder's single-select is populated only from explicit model Steps
 already present in the current Combo, and API normalization removes stale or non-model references.
 
-The judge receives only the extracted current user request plus a fixed classification instruction.
-Tools, tool choice, accumulated conversation metadata, and the original response stream are not
-forwarded. It must answer with exactly `FAST_WORKER` or `STRONG_REASONING`. The call is made only
-when deterministic rules remain neutral; clear Fast Worker and Strong Reasoning classifications do
-not pay for or wait on a judge call. A valid verdict supplies the missing role preference before
-role-scoped scoring; it does not choose the final provider itself.
+The judge is a **last-resort tie-breaker**, not the normal neutral path. Deterministic Fast Worker
+and Strong Reasoning classifications bypass it. A deterministic neutral result first reuses the
+existing Auto scorer with the effective base router weights and no adaptive role boost. If the top
+score belongs uniquely to a Fast Worker or Strong Reasoning Step, that role is accepted locally and
+no classifier model call is made.
+
+The AI classifier is eligible only when **both** Fast Worker and Strong Reasoning have routable
+candidates and the neutral scoring pass still has no unique role: the top candidate is
+General/unassigned, the top Step belongs to both roles, or Fast and Strong candidates tie inside the
+router-score epsilon. With only one or zero routable role pools the classifier is skipped because
+there is no meaningful Fast-versus-Strong choice to resolve.
+
+When invoked, the judge receives the extracted current user request plus bounded routing context and
+a fixed classification instruction. Tool schemas and the original response stream are not
+forwarded. It must answer with exactly `FAST_WORKER` or `STRONG_REASONING`. A valid verdict supplies
+the missing role preference before role-scoped scoring; it does not choose the final provider
+itself.
 
 The selected Step is judge-only by default. Unless it is also explicitly checked in Fast Worker or
 Strong Reasoning, it is removed from the worker candidate universe before scoring and therefore
@@ -883,14 +896,13 @@ Explicitly assigning the same Step to a worker role intentionally allows it to s
 
 The call is marked internal, skips Context Relay and session-affinity tracking, and uses the exact
 resolved Step target, including its pinned connection when configured. HTTP errors, timeouts,
-invalid output, an unavailable target, or a missing reference all fail open to the existing
-deterministic classifier so the main request continues normally.
+invalid output, an unavailable target, or a missing reference all fail open to the existing neutral
+Auto path so the main request continues normally.
 
-Valid decisions are reused for repeated identical automation turns through a bounded process-local
-cache keyed by Combo, judge execution target, and extracted prompt (one-hour TTL, 1,000 entries).
-Coding classification also distinguishes routine formatting, renaming, lookup, and test execution
-from debugging, architecture, refactoring, migrations, and repository-wide implementation work;
-ambiguous coding is intentionally left for the optional judge.
+Valid judge decisions are still reused for repeated identical automation turns through a bounded
+process-local cache keyed by Combo, judge execution target, extracted prompt, and routing-context
+digest (one-hour TTL, 1,000 entries). The cache is now secondary protection: neutral requests that
+the normal router can resolve never spend classifier tokens in the first place.
 
 ### Builder Naming and Layout
 
@@ -920,11 +932,13 @@ concerns separate:
 - **capability metadata**: total input size, requested output, message count, and advertised tools
   constrain what a model can execute but do not imply reasoning difficulty.
 
-The optional AI Intent Classifier receives this bounded context only when deterministic rules are
-neutral. Its cache key includes a context digest, so identical text such as `continue` is rejudged
-when recent execution state changes. Legacy task-aware fallback ordering consumes the final front
-role decision: it retains raw input size for context-window fit but cannot independently promote a
-Fast request to Heavy/Critical because the conversation happens to be long.
+When deterministic classification remains neutral, Auto first performs the local neutral router
+scoring pass described above. Only if that scoring is still role-neutral can the optional AI Intent
+Classifier receive the bounded context. Its cache key includes a context digest, so identical text
+such as `continue` is rejudged only when the AI tie-breaker is actually needed and recent execution
+state changes. Legacy task-aware fallback ordering consumes the final front role decision: it
+retains raw input size for context-window fit but cannot independently promote a Fast request to
+Heavy/Critical because the conversation happens to be long.
 
 Task-aware execution is observable at INFO level on every non-empty task-aware route. Auto logs use
 `scope=fallback-only` and show the protected primary plus ordered fallback tail; legacy task-aware
@@ -987,3 +1001,35 @@ The repository's push-triggered `Build App` workflow is also expected to run for
 GitHub connector used for this edit does not expose a command runner or workflow run listing for
 push events, so Node/Vitest/typecheck/lint results must be recorded as green only after an actual
 runner reports them; `status.md` keeps that validation state explicit.
+
+---
+
+## Neutral Router-Score Gate Before AI Classification
+
+The neutral path now preserves the intended token-cost hierarchy:
+
+```text
+Deterministic Fast/Strong
+  → use that role directly
+
+Deterministic neutral
+  → ordinary Auto router scoring, base/effective weights, no role boost
+      → unique Fast top score   → Fast Worker, no AI call
+      → unique Strong top score → Strong Reasoning, no AI call
+      → role-neutral top score  → optional AI Intent Classifier
+```
+
+A router score is considered role-neutral when the top score band contains a General/unassigned
+candidate, a candidate assigned to both roles, or equally-scored Fast and Strong candidates. The
+comparison uses a small `1e-4` epsilon to absorb floating-point normalization noise without treating
+a meaningfully lower opposing role as a tie.
+
+The AI branch additionally requires routable candidates in **both** explicit role pools. If one side
+is absent or fully filtered by quota/eligibility, no classifier tokens are spent; neutral Auto
+scoring continues normally. This gate changes only how a missing role preference is resolved. It
+does not alter primary-selection authority, role-specific weight application, or the categorized
+Strong → Fast → General / Fast → Strong → General fallback contract.
+
+Focused regression coverage lives in `tests/unit/autoCombo/adaptiveRoleResolution.test.ts` and locks
+unique Fast/Strong resolution, cross-role ties, General and dual-role neutrality, and the epsilon
+boundary.
