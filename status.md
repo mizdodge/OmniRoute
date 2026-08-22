@@ -255,7 +255,7 @@ Final Score = Existing Intelligent Score + (Role Pool Suitability × Role Pool W
 2. Add `fastWorkerPoolWeight`, `strongReasoningPoolWeight` to `ScoringWeights` (default 0)
 3. In `calculateFactors()` / `scoreAutoTargets()`, compute suitability:
    - If candidate.stepId in config.fastWorkerModelRefs → fastWorkerPoolSuitability = 1.0
-   - If candidate.stepId in config.strongReasoningModelRefs → strongWorkerPoolSuitability = 1.0
+   - If candidate.stepId in config.strongReasoningModelRefs → strongReasoningPoolSuitability = 1.0
    - Else 0
 4. Task classification determines which role pool weight is active:
    - Simple task → apply fastWorkerPoolWeight
@@ -664,9 +664,10 @@ Status: Completed
   Steps and a Review summary showing the selected classifier or rules-only mode.
 - The judge receives only the extracted current user request in a small non-streaming request and
   must return exactly `FAST_WORKER` or `STRONG_REASONING`.
-- A valid verdict supplies the role only when deterministic rules remain neutral. The existing Auto
-  scorer still chooses the concrete primary model inside the selected worker pool.
-- Judge failures, timeouts, invalid output, or missing targets fail open to deterministic rules and
+- A valid verdict supplies the role only after deterministic rules and neutral router scoring both
+  remain role-neutral. The existing Auto scorer still chooses the concrete primary model inside the
+  selected worker pool.
+- Judge failures, timeouts, invalid output, or missing targets fail open to the neutral Auto path and
   never block the main request.
 - Internal judge calls skip Context Relay and session/account-affinity tracking and use the exact
   selected Step target, including its pinned connection.
@@ -684,14 +685,15 @@ Status: Completed
   pool remains a hard primary-selection boundary.
 - Legacy `task-route` and prompt-cache affinity may reorder only Auto's fallback tail. They cannot
   override the primary selected from either an explicit role pool or the general worker pool.
-- AI Intent Classifier now runs only for neutral deterministic classifications. Clear Fast Worker
-  and Strong Reasoning requests bypass the extra model call.
+- AI Intent Classifier is not triggered merely by a neutral deterministic classification. Neutral
+  requests first use local Auto router scoring; only a role-neutral top score can reach the optional
+  classifier, while clear Fast Worker and Strong Reasoning requests bypass the extra model call.
 - Added light-versus-heavy coding signals: routine formatting, renaming, lookup, and test-running
   prefer Fast Worker; debugging, architecture, refactoring, migrations, and repository-wide work
-  prefer Strong Reasoning; ambiguous coding can be resolved by the optional judge.
+  prefer Strong Reasoning; ambiguous coding can be resolved by router scoring or the optional judge.
 - Assistant/tool automation continuations ignore protocol-level explicit tool choice as a new
-  complexity signal, and repeated identical neutral requests reuse a bounded one-hour judge verdict
-  cache keyed by Combo, judge target, and extracted prompt.
+  complexity signal, and repeated identical judge-needed requests reuse a bounded one-hour verdict
+  cache keyed by Combo, judge target, extracted prompt, and routing-context digest.
 
 #### Validation
 
@@ -740,9 +742,10 @@ Status: Completed
   tool activity and failure signals, normalized reasoning effort, and a stable context digest.
 - Deterministic classification still prioritizes the extracted current request. Two recent failed
   tool events can promote an otherwise ambiguous fix/debug/continue automation turn.
-- AI Intent Classifier calls now receive the current request plus bounded execution context, not raw
-  conversation history or tool schemas. Cache keys include the routing-context digest, preventing a
-  stale Fast verdict from being reused after the execution state materially changes.
+- AI Intent Classifier calls receive the current request plus bounded execution context, not raw
+  conversation history or tool schemas, only after local router scoring also remains role-neutral.
+  Cache keys include the routing-context digest, preventing a stale Fast verdict from being reused
+  after the execution state materially changes.
 - Auto passes its final Fast/Strong decision to legacy fallback ordering. Legacy task routing keeps
   full input size for context-window fit, but raw history/tool inventory cannot independently change
   the reasoning tier selected by the front classifier.
