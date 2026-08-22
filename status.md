@@ -255,7 +255,7 @@ Final Score = Existing Intelligent Score + (Role Pool Suitability × Role Pool W
 2. Add `fastWorkerPoolWeight`, `strongReasoningPoolWeight` to `ScoringWeights` (default 0)
 3. In `calculateFactors()` / `scoreAutoTargets()`, compute suitability:
    - If candidate.stepId in config.fastWorkerModelRefs → fastWorkerPoolSuitability = 1.0
-   - If candidate.stepId in config.strongReasoningModelRefs → strongReasoningPoolSuitability = 1.0
+   - If candidate.stepId in config.strongReasoningModelRefs → strongWorkerPoolSuitability = 1.0
    - Else 0
 4. Task classification determines which role pool weight is active:
    - Simple task → apply fastWorkerPoolWeight
@@ -806,3 +806,31 @@ Status: Implemented; runtime validation pending
   so the Node/Vitest/typecheck/lint commands recorded elsewhere in this file have not been
   re-executed from this session yet. Do not treat this subsection as a green runtime validation
   until the branch build or a local checkout reports the results.
+
+### Post-Phase 5 — Neutral Router-Score Gate for AI Intent Classifier
+
+Status: Implemented; runtime validation pending
+
+- Fixed the AI Intent Classifier trigger so a deterministic `neutral` result no longer causes an
+  immediate model call.
+- Neutral requests first reuse the normal Auto `scoreAutoTargets()` path with the effective base
+  router weights and **no adaptive role boost**. This is a local scoring pass and consumes no model
+  tokens.
+- A unique top-scoring Fast Worker or Strong Reasoning Step resolves the role directly and records a
+  `router-score:<role>` signal; the optional AI classifier is skipped.
+- The AI classifier is now a last-resort role tie-breaker only when both Fast Worker and Strong
+  Reasoning pools have routable candidates and the top router score remains role-neutral: a
+  General/unassigned winner, a dual-role winner, or a Fast-versus-Strong score tie within the
+  router-score epsilon.
+- If only one or neither role pool has a routable candidate, the classifier is skipped because it
+  cannot make a meaningful Fast-versus-Strong choice; normal neutral Auto scoring continues.
+- The categorized execution contract is unchanged: Strong → Fast → General and Fast → Strong →
+  General. `task-route` and prompt-cache affinity still cannot cross adaptive fallback tiers.
+- Added `adaptiveRoleResolution.ts` plus focused unit coverage for unique Fast/Strong winners,
+  cross-role ties, General winners, dual-role winners, and near-but-not-tied opposing scores.
+
+#### Validation
+
+- Source and regression tests are committed on `codex/adaptive-routing`.
+- Runtime tests/typechecks/build have not been executed by this GitHub-editing session; run the
+  focused Node test and repository validation locally before treating this change as fully green.
