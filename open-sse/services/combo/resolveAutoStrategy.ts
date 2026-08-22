@@ -15,6 +15,7 @@ import { getModePack } from "../autoCombo/modePacks.ts";
 import { classifyAdaptiveTask, getAdaptiveRoleWeight } from "../autoCombo/taskClassification.ts";
 import { activateAdaptiveRoleWeight } from "../autoCombo/scoring.ts";
 import { runAdaptiveJudge } from "../autoCombo/adaptiveJudge.ts";
+import { resolveNeutralRoleFromRouterScores } from "../autoCombo/adaptiveRoleResolution.ts";
 import { buildFrontRoutingContext } from "../autoCombo/routingContext.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
@@ -338,31 +339,69 @@ export async function resolveAutoStrategyOrder(
   const routableCandidates = candidates.filter(
     (candidate) => candidate.quotaCutoffBlocked !== true
   );
-  if (
-    judgeTarget &&
-    adaptiveTask.preferredRole === null &&
-    body._omnirouteInternalRequest !== "adaptive-judge"
-  ) {
-    const judgeVerdict = await runAdaptiveJudge({
-      prompt,
-      target: judgeTarget,
-      cacheScope: combo.id || combo.name,
-      routingContext,
-      handleSingleModel: deps.handleSingleModel,
-      log,
-    });
-    if (judgeVerdict) {
-      adaptiveTask = {
-        complexity: judgeVerdict === "strongReasoning" ? "complex" : "simple",
-        preferredRole: judgeVerdict,
-        signals: [`ai-judge:${judgeTarget.stepId}`],
-      };
-    }
-  }
   const fastWorkerStepIds = new Set(rolePools.fastWorker.map((target) => target.stepId));
   const strongReasoningStepIds = new Set(rolePools.strongReasoning.map((target) => target.stepId));
   const hasFastWorkerPool = fastWorkerStepIds.size > 0;
   const hasStrongReasoningPool = strongReasoningStepIds.size > 0;
+  const hasRoutableFastWorkerPool = routableCandidates.some((candidate) =>
+    fastWorkerStepIds.has(candidate.stepId)
+  );
+  const hasRoutableStrongReasoningPool = routableCandidates.some((candidate) =>
+    strongReasoningStepIds.has(candidate.stepId)
+  );
+
+  // Neutral deterministic classification is not enough reason to spend an extra
+  // model call. First let the existing Auto router score the same routable worker
+  // candidates with the effective base weights and no adaptive role boost. Only a
+  // role-neutral top score (General/both-role/tied Fast-vs-Strong) can fall through
+  // to the optional AI classifier, and only when both role pools are actually
+  // routable for this request.
+  if (
+    adaptiveTask.preferredRole === null &&
+    hasRoutableFastWorkerPool &&
+    hasRoutableStrongReasoningPool
+  ) {
+    const neutralRouterScores = scoreAutoTargets(
+      workerEligibleTargets,
+      routableCandidates,
+      taskType,
+      baseWeights
+    );
+    const routerResolvedRole = resolveNeutralRoleFromRouterScores(
+      neutralRouterScores,
+      fastWorkerStepIds,
+      strongReasoningStepIds
+    );
+
+    if (routerResolvedRole) {
+      adaptiveTask = {
+        complexity: routerResolvedRole === "strongReasoning" ? "complex" : "simple",
+        preferredRole: routerResolvedRole,
+        signals: [...adaptiveTask.signals, `router-score:${routerResolvedRole}`],
+      };
+      log.debug?.(
+        "COMBO",
+        `Adaptive neutral request resolved by router scoring: ${routerResolvedRole}; AI classifier skipped`
+      );
+    } else if (judgeTarget && body._omnirouteInternalRequest !== "adaptive-judge") {
+      const judgeVerdict = await runAdaptiveJudge({
+        prompt,
+        target: judgeTarget,
+        cacheScope: combo.id || combo.name,
+        routingContext,
+        handleSingleModel: deps.handleSingleModel,
+        log,
+      });
+      if (judgeVerdict) {
+        adaptiveTask = {
+          complexity: judgeVerdict === "strongReasoning" ? "complex" : "simple",
+          preferredRole: judgeVerdict,
+          signals: [`ai-judge:${judgeTarget.stepId}`],
+        };
+      }
+    }
+  }
+
   for (const candidate of routableCandidates) {
     candidate.fastWorkerPoolSuitability = hasFastWorkerPool
       ? fastWorkerStepIds.has(candidate.stepId)
