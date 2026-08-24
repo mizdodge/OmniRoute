@@ -69,7 +69,7 @@ test("Latin intent keywords match whole words instead of substrings in ordinary 
   assert.equal(classifyPromptIntent("call this API endpoint"), "code");
 });
 
-test("available tool schemas stay neutral but an explicit tool choice is complex", () => {
+test("available tool schemas preserve Fast routing but an explicit tool choice is Strong", () => {
   const availableOnly = classifyAdaptiveTask(
     "medium",
     { tools: [{ type: "function", function: { name: "search" } }] },
@@ -84,7 +84,7 @@ test("available tool schemas stay neutral but an explicit tool choice is complex
     20
   );
 
-  assert.equal(availableOnly.preferredRole, null);
+  assert.equal(availableOnly.preferredRole, "fastWorker");
   assert.equal(explicitlyRequired.preferredRole, "strongReasoning");
   assert.ok(explicitlyRequired.signals.includes("explicit-tool-choice"));
 });

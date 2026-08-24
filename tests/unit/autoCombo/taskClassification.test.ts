@@ -30,11 +30,62 @@ const neutralFactors: ScoringFactors = {
 };
 
 test("simple intent prefers Fast Worker when no complex request signal is present", () => {
-  assert.deepEqual(classifyAdaptiveTask("simple", { messages: [{ role: "user" }] }, 20), {
+  assert.deepEqual(classifyAdaptiveTask("simple", { messages: [{ role: "user" }] }, 20, "hi"), {
     complexity: "simple",
     preferredRole: "fastWorker",
-    signals: ["intent:simple"],
+    scores: { fastWorker: 0.8, strongReasoning: 0 },
+    margin: 0.8,
+    factorScores: {
+      "intent:simple": { fastWorker: 0.75, strongReasoning: 0 },
+      "short-current-request": { fastWorker: 0.2, strongReasoning: 0 },
+    },
+    signals: ["intent:simple", "short-current-request"],
   });
+});
+
+test("deterministic heuristic compares Fast and Strong evidence before selecting a role", () => {
+  const fast = classifyAdaptiveTask("code", {}, 40, "run the formatter on this file");
+  const medium = classifyAdaptiveTask("medium", {}, 40, "classify these items");
+  const neutral = classifyAdaptiveTask("creative", {}, 40, "write a poem about rain");
+  const strong = classifyAdaptiveTask(
+    "reasoning",
+    { tool_choice: "required", reasoning_effort: "high" },
+    2_500,
+    "reason through this carefully"
+  );
+
+  assert.deepEqual(fast.scores, { fastWorker: 0.85, strongReasoning: 0.25 });
+  assert.equal(fast.margin, 0.6);
+  assert.deepEqual(medium.scores, { fastWorker: 0.48, strongReasoning: 0 });
+  assert.equal(medium.margin, 0.48);
+  assert.deepEqual(neutral.scores, { fastWorker: 0.32, strongReasoning: 0.25 });
+  assert.equal(neutral.margin, 0.07);
+  assert.ok(strong.scores.strongReasoning > 0.99);
+  assert.deepEqual(strong.factorScores, {
+    "intent:reasoning": { fastWorker: 0, strongReasoning: 0.8 },
+    "explicit-tool-choice": { fastWorker: 0, strongReasoning: 0.6 },
+    "long-current-request": { fastWorker: 0, strongReasoning: 0.65 },
+    "high-reasoning-effort": { fastWorker: 0, strongReasoning: 0.85 },
+  });
+  assert.equal(fast.preferredRole, "fastWorker");
+  assert.equal(medium.preferredRole, "fastWorker");
+  assert.equal(neutral.preferredRole, null);
+  assert.equal(strong.preferredRole, "strongReasoning");
+});
+
+test("conflicting Fast and Strong evidence stays neutral for the AI tie-breaker", () => {
+  const result = classifyAdaptiveTask(
+    "code",
+    { reasoning_effort: "high" },
+    40,
+    "run the formatter on this file"
+  );
+
+  assert.equal(result.preferredRole, null);
+  assert.equal(result.complexity, "neutral");
+  assert.ok(result.scores.fastWorker >= 0.8);
+  assert.ok(result.scores.strongReasoning >= 0.8);
+  assert.ok(result.margin < 0.18);
 });
 
 test("math and reasoning intents prefer Strong Reasoning", () => {
@@ -56,11 +107,11 @@ test("coding intent distinguishes routine IDE work from difficult engineering", 
   const ambiguous = classifyAdaptiveTask("code", {}, 40, "update this endpoint");
 
   assert.equal(light.preferredRole, "fastWorker");
-  assert.deepEqual(light.signals, ["code:light"]);
+  assert.deepEqual(light.signals, ["intent:code", "short-current-request", "code:light"]);
   assert.equal(heavy.preferredRole, "strongReasoning");
-  assert.deepEqual(heavy.signals, ["code:heavy"]);
+  assert.deepEqual(heavy.signals, ["intent:code", "short-current-request", "code:heavy"]);
   assert.equal(ambiguous.preferredRole, null);
-  assert.deepEqual(ambiguous.signals, ["intent:code"]);
+  assert.deepEqual(ambiguous.signals, ["intent:code", "short-current-request"]);
 });
 
 test("an IDE automation continuation ignores tool inventory and required-tool metadata", () => {
@@ -80,7 +131,7 @@ test("an IDE automation continuation ignores tool inventory and required-tool me
   );
 
   assert.equal(result.preferredRole, "fastWorker");
-  assert.deepEqual(result.signals, ["code:light"]);
+  assert.deepEqual(result.signals, ["intent:code", "short-current-request", "code:light"]);
 });
 
 test("explicit tool choice and large user request conservatively promote ambiguous intent", () => {
@@ -101,13 +152,19 @@ test("available tool schemas and long conversation history do not override curre
     50
   );
 
-  assert.equal(result.preferredRole, null);
+  assert.equal(result.preferredRole, "fastWorker");
   assert.deepEqual(result.signals, ["intent:medium"]);
 });
 
-test("ambiguous medium and creative requests remain neutral without complexity signals", () => {
-  assert.equal(classifyAdaptiveTask("medium", {}, 100).preferredRole, null);
-  assert.equal(classifyAdaptiveTask("creative", {}, 100).preferredRole, null);
+test("ordinary medium prefers Fast while creative ambiguity remains neutral", () => {
+  assert.equal(
+    classifyAdaptiveTask("medium", {}, 100, "classify these items").preferredRole,
+    "fastWorker"
+  );
+  assert.equal(
+    classifyAdaptiveTask("creative", {}, 100, "write a poem about rain").preferredRole,
+    null
+  );
 });
 
 test("mode packs bias Ship Fast toward Fast Worker and Quality First toward Strong Reasoning", () => {

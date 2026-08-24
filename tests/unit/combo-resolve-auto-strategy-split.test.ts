@@ -331,6 +331,55 @@ function adaptiveDeps(name: string, prompt: string, explorationRate = 0) {
   } as never;
 }
 
+test("adaptive auto emits readable named pipeline checkpoints", async () => {
+  const infoLogs: string[] = [];
+  const deps = adaptiveDeps("adaptive-step-logs", "hi");
+  deps.log = {
+    ...noopLog,
+    info(_tag: unknown, message: unknown) {
+      infoLogs.push(String(message));
+    },
+  };
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.ok("orderedTargets" in result);
+  assert.ok(
+    infoLogs.some((message) =>
+      message.startsWith(
+        "[STEP] Adaptive Deterministic : role=fastWorker | complexity=simple | " +
+          "fastScore=0.800 | strongScore=0.000 | margin=0.800 | " +
+          "minScore=0.350 | minMargin=0.180 | " +
+          "factors=intent:simple(F=0.750,S=0.000),short-current-request(F=0.200,S=0.000) | signals="
+      )
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] AI Intent Classifier : skipped | reason=deterministic-role | role=fastWorker"
+    )
+  );
+  assert.ok(
+    infoLogs.some((message) =>
+      message.startsWith(
+        "[STEP] Adaptive-Router : role=fastWorker | activePool=fastWorker | poolSize=1 | "
+      )
+    )
+  );
+  assert.equal(
+    infoLogs.some(
+      (message) => message.startsWith("[STEP] Adaptive-Router : ") && message.includes("selected=")
+    ),
+    false,
+    "Adaptive-Router reports only the selected role/pool; Task-Route owns model selection"
+  );
+  const adaptiveRouterLog = infoLogs.find((message) =>
+    message.startsWith("[STEP] Adaptive-Router : ")
+  );
+  assert.ok(adaptiveRouterLog);
+  assert.doesNotMatch(adaptiveRouterLog, /(?:^|\s)score=/);
+});
+
 test("adaptive role scoring selects the semantic role and builds a cross-role fallback tail", async () => {
   const simple = await resolveAutoStrategyOrder(
     adaptiveDeps("adaptive-simple-runtime", "what is gravity")
@@ -486,8 +535,42 @@ test("exploration cannot cross from a routable Fast Worker pool into Strong Reas
   );
 });
 
+test("heuristic Medium score selects Fast without spending an AI classifier call", async () => {
+  const deps = adaptiveDeps("adaptive-medium-fast-without-ai", "classify these items");
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  let classifierCalls = 0;
+  deps.handleSingleModel = (async () => {
+    classifierCalls += 1;
+    return Response.json({ choices: [{ message: { content: "STRONG_REASONING" } }] });
+  }) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.equal(classifierCalls, 0);
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0]?.stepId, "fast-step");
+});
+
+test("AI classifier runs only when heuristic Fast and Strong scores remain neutral", async () => {
+  const deps = adaptiveDeps("adaptive-ai-classifier-neutral-only", "write a poem about rain");
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  let classifierCalls = 0;
+  deps.handleSingleModel = (async () => {
+    classifierCalls += 1;
+    return Response.json({ choices: [{ message: { content: "STRONG_REASONING" } }] });
+  }) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.equal(classifierCalls, 1);
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
+});
+
 test("configured AI Judger overrides rules using its one selected Combo Step", async () => {
-  const deps = adaptiveDeps("adaptive-ai-judge", "please classify these items");
+  const deps = adaptiveDeps("adaptive-ai-judge", "write a poem about rain");
   deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
   let judgeCalls = 0;
   deps.handleSingleModel = (async (body, modelStr, target) => {

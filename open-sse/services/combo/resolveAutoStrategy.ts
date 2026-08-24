@@ -12,10 +12,14 @@ import {
 import { selectWithStrategy } from "../autoCombo/routerStrategy.ts";
 import { buildComplexityRoutingHint } from "../autoCombo/complexityRouter";
 import { getModePack } from "../autoCombo/modePacks.ts";
-import { classifyAdaptiveTask, getAdaptiveRoleWeight } from "../autoCombo/taskClassification.ts";
+import {
+  ADAPTIVE_ROLE_MIN_MARGIN,
+  ADAPTIVE_ROLE_MIN_SCORE,
+  classifyAdaptiveTask,
+  getAdaptiveRoleWeight,
+} from "../autoCombo/taskClassification.ts";
 import { activateAdaptiveRoleWeight } from "../autoCombo/scoring.ts";
 import { runAdaptiveJudge } from "../autoCombo/adaptiveJudge.ts";
-import { resolveNeutralRoleFromRouterScores } from "../autoCombo/adaptiveRoleResolution.ts";
 import { buildFrontRoutingContext } from "../autoCombo/routingContext.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
@@ -237,6 +241,24 @@ export async function resolveAutoStrategyOrder(
     prompt,
     routingContext
   );
+  log.info(
+    "COMBO",
+    `[STEP] Adaptive Deterministic : role=${adaptiveTask.preferredRole || "neutral"} | ` +
+      `complexity=${adaptiveTask.complexity} | ` +
+      `fastScore=${adaptiveTask.scores.fastWorker.toFixed(3)} | ` +
+      `strongScore=${adaptiveTask.scores.strongReasoning.toFixed(3)} | ` +
+      `margin=${adaptiveTask.margin.toFixed(3)} | ` +
+      `minScore=${ADAPTIVE_ROLE_MIN_SCORE.toFixed(3)} | ` +
+      `minMargin=${ADAPTIVE_ROLE_MIN_MARGIN.toFixed(3)} | ` +
+      `factors=${
+        Object.entries(adaptiveTask.factorScores)
+          .map(
+            ([factor, scores]) =>
+              `${factor}(F=${scores.fastWorker.toFixed(3)},S=${scores.strongReasoning.toFixed(3)})`
+          )
+          .join(",") || "none"
+      } | signals=${adaptiveTask.signals.join(",") || "none"}`
+  );
   log.debug?.("COMBO", "Front routing context analyzed", {
     currentRequestTokens: estimatedUserRequestTokens,
     totalInputTokens: routingContext.capability.estimatedTotalInputTokens,
@@ -343,63 +365,51 @@ export async function resolveAutoStrategyOrder(
   const strongReasoningStepIds = new Set(rolePools.strongReasoning.map((target) => target.stepId));
   const hasFastWorkerPool = fastWorkerStepIds.size > 0;
   const hasStrongReasoningPool = strongReasoningStepIds.size > 0;
-  const hasRoutableFastWorkerPool = routableCandidates.some((candidate) =>
-    fastWorkerStepIds.has(candidate.stepId)
-  );
-  const hasRoutableStrongReasoningPool = routableCandidates.some((candidate) =>
-    strongReasoningStepIds.has(candidate.stepId)
-  );
 
-  // Neutral deterministic classification is not enough reason to spend an extra
-  // model call. First let the existing Auto router score the same routable worker
-  // candidates with the effective base weights and no adaptive role boost. Only a
-  // role-neutral top score (General/both-role/tied Fast-vs-Strong) can fall through
-  // to the optional AI classifier, and only when both role pools are actually
-  // routable for this request.
-  if (
-    adaptiveTask.preferredRole === null &&
-    hasRoutableFastWorkerPool &&
-    hasRoutableStrongReasoningPool
-  ) {
-    const neutralRouterScores = scoreAutoTargets(
-      workerEligibleTargets,
-      routableCandidates,
-      taskType,
-      baseWeights
+  // Preserve the 3.8.50 classifier flow: deterministic Fast/Strong decisions win,
+  // while a neutral decision goes directly to the configured AI classifier before
+  // the main Auto scoring pass. Classifier failures still fail open to neutral Auto.
+  if (adaptiveTask.preferredRole !== null) {
+    log.info(
+      "COMBO",
+      `[STEP] AI Intent Classifier : skipped | reason=deterministic-role | role=${adaptiveTask.preferredRole}`
     );
-    const routerResolvedRole = resolveNeutralRoleFromRouterScores(
-      neutralRouterScores,
-      fastWorkerStepIds,
-      strongReasoningStepIds
-    );
-
-    if (routerResolvedRole) {
+  } else if (judgeTarget && body._omnirouteInternalRequest !== "adaptive-judge") {
+    const judgeVerdict = await runAdaptiveJudge({
+      prompt,
+      target: judgeTarget,
+      cacheScope: combo.id || combo.name,
+      routingContext,
+      handleSingleModel: deps.handleSingleModel,
+      log,
+    });
+    if (judgeVerdict) {
       adaptiveTask = {
-        complexity: routerResolvedRole === "strongReasoning" ? "complex" : "simple",
-        preferredRole: routerResolvedRole,
-        signals: [...adaptiveTask.signals, `router-score:${routerResolvedRole}`],
+        complexity: judgeVerdict === "strongReasoning" ? "complex" : "simple",
+        preferredRole: judgeVerdict,
+        scores:
+          judgeVerdict === "strongReasoning"
+            ? { fastWorker: 0, strongReasoning: 1 }
+            : { fastWorker: 1, strongReasoning: 0 },
+        margin: 1,
+        factorScores: {
+          [`ai-judge:${judgeTarget.stepId}`]:
+            judgeVerdict === "strongReasoning"
+              ? { fastWorker: 0, strongReasoning: 1 }
+              : { fastWorker: 1, strongReasoning: 0 },
+        },
+        signals: [`ai-judge:${judgeTarget.stepId}`],
       };
-      log.debug?.(
-        "COMBO",
-        `Adaptive neutral request resolved by router scoring: ${routerResolvedRole}; AI classifier skipped`
-      );
-    } else if (judgeTarget && body._omnirouteInternalRequest !== "adaptive-judge") {
-      const judgeVerdict = await runAdaptiveJudge({
-        prompt,
-        target: judgeTarget,
-        cacheScope: combo.id || combo.name,
-        routingContext,
-        handleSingleModel: deps.handleSingleModel,
-        log,
-      });
-      if (judgeVerdict) {
-        adaptiveTask = {
-          complexity: judgeVerdict === "strongReasoning" ? "complex" : "simple",
-          preferredRole: judgeVerdict,
-          signals: [`ai-judge:${judgeTarget.stepId}`],
-        };
-      }
     }
+  } else {
+    log.info(
+      "COMBO",
+      `[STEP] AI Intent Classifier : skipped | reason=${
+        body._omnirouteInternalRequest === "adaptive-judge"
+          ? "internal-classifier-request"
+          : "not-configured"
+      }`
+    );
   }
 
   for (const candidate of routableCandidates) {
@@ -471,7 +481,6 @@ export async function resolveAutoStrategyOrder(
     let selectedProvider: string | null = null;
     let selectedModel: string | null = null;
     let selectedConnectionId: string | null = null;
-    let selectionReason = "";
 
     if (routingStrategy !== "rules") {
       try {
@@ -489,7 +498,6 @@ export async function resolveAutoStrategyOrder(
         selectedProvider = decision.provider;
         selectedModel = decision.model;
         selectedConnectionId = decision.connectionId ?? null;
-        selectionReason = decision.reason;
         autoUsedExplicitRouter = true;
       } catch (err) {
         log.warn(
@@ -531,7 +539,6 @@ export async function resolveAutoStrategyOrder(
       selectedProvider = selection.provider;
       selectedModel = selection.model;
       selectedConnectionId = selection.connectionId ?? null;
-      selectionReason = `score=${selection.score.toFixed(3)}${selection.isExploration ? " (exploration)" : ""}${adaptiveRoleActive ? ` role-pool=${adaptiveTask.preferredRole}` : ""}`;
     }
 
     // Complexity-aware routing (2026, opt-in): classify the request's
@@ -591,22 +598,34 @@ export async function resolveAutoStrategyOrder(
       };
     }
 
-    // Keep workerEligibleTargets as the last-resort fallback tail: dedupe drops the
-    // routable ranked ones (and, when the cutoff is OFF, makes this identical to
-    // the pre-cutoff behavior), but a quota-blocked target still survives as a
-    // final fallback instead of vanishing — the hard cutoff only de-prioritizes.
+    // Once Adaptive has selected a role, its responsibility ends at the pool
+    // boundary. Pass the complete tiered pool order to Task-Route so that layer
+    // chooses the concrete executor inside the active pool. Do not prepend the
+    // rules scorer's raw target: it does not carry fallback-tier metadata and can
+    // therefore be mistaken for a General candidate downstream.
+    //
+    // With no adaptive role, retain the legacy Auto primary. The final
+    // workerEligibleTargets tail keeps quota-blocked candidates as last-resort
+    // fallbacks instead of removing them completely.
+    const adaptivePoolOrder = adaptiveTask.preferredRole
+      ? rankedTargets
+      : [selectedTarget, ...rankedTargets];
     orderedTargets = dedupeTargetsByExecutionKey(
-      [selectedTarget, ...rankedTargets, ...workerEligibleTargets].filter(
+      [...adaptivePoolOrder, ...workerEligibleTargets].filter(
         (entry): entry is ResolvedComboTarget => entry !== undefined && entry !== null
       )
     );
 
+    const activePool = preferredPoolHasCandidates ? adaptiveTask.preferredRole : "general";
     log.info(
       "COMBO",
-      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} adaptive=${adaptiveTask.preferredRole || "neutral"} signals=${adaptiveTask.signals.join(",") || "none"} | strategy=${routingStrategy} | ${selectionReason}`
+      `[STEP] Adaptive-Router : role=${adaptiveTask.preferredRole || "neutral"} | ` +
+        `activePool=${activePool || "general"} | poolSize=${primaryRulesCandidates.length} | ` +
+        `intent=${intent} | task=${taskType} | ` +
+        `signals=${adaptiveTask.signals.join(",") || "none"} | strategy=${routingStrategy}`
     );
   } else {
-    log.warn("COMBO", "Auto strategy has no candidates, keeping default ordering");
+    log.warn("COMBO", "[STEP] Adaptive-Router : no-candidates | action=keep-default-order");
   }
 
   return { orderedTargets, autoUsedExplicitRouter, adaptiveTask };

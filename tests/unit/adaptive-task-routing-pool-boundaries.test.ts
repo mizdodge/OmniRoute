@@ -34,7 +34,7 @@ function fallbackTiers(targets: ResolvedComboTarget[]): number[] {
   );
 }
 
-test("Strong routing exhausts Strong pool, then Fast pool, then General", () => {
+test("Strong routing uses the 3.8.50 order: Strong, then Fast, then General", () => {
   const strongA = target("strong-a", "provider/ultra-a");
   const strongB = target("strong-b", "provider/ultra-b");
   const fastA = target("fast-a", "provider/flash-a");
@@ -56,7 +56,7 @@ test("Strong routing exhausts Strong pool, then Fast pool, then General", () => 
   assert.deepEqual(fallbackTiers(ordered), [0, 0, 1, 2]);
 });
 
-test("Fast routing exhausts Fast pool, then Strong pool, then General", () => {
+test("Fast routing uses the 3.8.50 order: Fast, then Strong, then General", () => {
   const strongA = target("strong-a", "provider/ultra-a");
   const fastA = target("fast-a", "provider/flash-a");
   const fastB = target("fast-b", "provider/flash-b");

@@ -25,7 +25,7 @@ test("large IDE history is a capability requirement, not automatic Strong Reason
   assert.equal(context.capability.advertisedToolCount, 59);
   assert.ok(context.recentWorkSummary.length <= 2_000);
   assert.equal(decision.preferredRole, "fastWorker");
-  assert.deepEqual(decision.signals, ["code:light"]);
+  assert.deepEqual(decision.signals, ["intent:code", "short-current-request", "code:light"]);
 });
 
 test("bounded recent failures can promote an ambiguous continuation without raw-history bias", () => {

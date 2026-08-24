@@ -705,19 +705,21 @@ additional model call.
 
 ```text
 simple + no complex signal         → Fast Worker
+ordinary medium + short request    → Fast Worker
 light coding                        → Fast Worker
 heavy coding                        → Strong Reasoning
-ambiguous coding                    → neutral / router scoring first; optional AI tie-breaker only if still neutral
+ambiguous/conflicting evidence      → neutral → optional AI tie-breaker
 math | reasoning                    → Strong Reasoning
 explicit tool choice                → Strong Reasoning for a new user request
 estimated input >= 2,000 tokens     → Strong Reasoning
-medium | creative without signals   → neutral
+creative without decisive evidence  → neutral
 ```
 
-Neutral is deliberate: an ambiguous request first follows existing Auto-Combo scoring with the
-effective base weights and no adaptive role boost. If that scoring has a unique Fast or Strong
-winner, the role is resolved locally. Only a role-neutral top result can reach the optional AI
-classifier, and only when both role pools have routable candidates.
+The deterministic classifier accumulates independent Fast Worker and Strong Reasoning evidence.
+It selects a role only when the winning score is at least `0.350` and the difference between the
+two scores is at least `0.180`. Low-confidence or conflicting evidence remains neutral and may
+reach the optional AI classifier. There is no intermediate model-ranking pass before that AI
+tie-breaker.
 
 ### Role-Aware Score
 
@@ -837,14 +839,15 @@ default profile, so existing Combos keep their previous behavior.
 
 After intent classification and normal eligibility filtering, routing is deliberately scoped:
 
-- One eligible model in the preferred role pool is selected directly.
-- Two or more eligible models are ranked against that role's Advanced Weight profile.
+- The Adaptive-Router chooses the role and active pool, not a concrete executor.
+- Candidates in the active pool are ranked against that role's Advanced Weight profile before the
+  tiered execution plan reaches Task-Route.
 - A request-level `X-OmniRoute-Mode` override still has higher priority than persisted profiles.
-- Task routing and prompt-cache affinity may reorder only the fallback tail; neither can replace
-  Auto's selected primary or move the primary into another role pool.
+- Task-Route chooses the concrete executor and may reorder models only inside the active pool;
+  neither it nor prompt-cache affinity can move a later pool ahead of that pool.
 - If the preferred role has no assigned models, every non-judge model Step is treated as a general
-  worker and ranked with that role's Advanced Weight profile. `task-route` still cannot replace the
-  resulting Auto primary.
+  worker and ranked with that role's Advanced Weight profile. Task-Route then chooses the concrete
+  model from that General pool.
 
 The Builder shows whether each role inherits Default or uses a custom profile, and the Review step
 shows the saved state before submission. The Combo API schema, normalization, OpenAPI contract, and
@@ -871,17 +874,11 @@ model Step through `adaptiveJudgeModelRef`. The value is a single stable Step ID
 model string or an array. The Builder's single-select is populated only from explicit model Steps
 already present in the current Combo, and API normalization removes stale or non-model references.
 
-The judge is a **last-resort tie-breaker**, not the normal neutral path. Deterministic Fast Worker
-and Strong Reasoning classifications bypass it. A deterministic neutral result first reuses the
-existing Auto scorer with the effective base router weights and no adaptive role boost. If the top
-score belongs uniquely to a Fast Worker or Strong Reasoning Step, that role is accepted locally and
-no classifier model call is made.
-
-The AI classifier is eligible only when **both** Fast Worker and Strong Reasoning have routable
-candidates and the neutral scoring pass still has no unique role: the top candidate is
-General/unassigned, the top Step belongs to both roles, or Fast and Strong candidates tie inside the
-router-score epsilon. With only one or zero routable role pools the classifier is skipped because
-there is no meaningful Fast-versus-Strong choice to resolve.
+The judge follows the **3.8.50 neutral flow**. Deterministic Fast Worker and Strong Reasoning
+classifications bypass it. When deterministic classification remains neutral and a classifier Step
+is configured, OmniRoute invokes that classifier immediately before the main Auto scoring pass.
+There is no intermediate local router-score gate and no requirement that both role pools already
+have routable candidates.
 
 When invoked, the judge receives the extracted current user request plus bounded routing context and
 a fixed classification instruction. Tool schemas and the original response stream are not
@@ -901,8 +898,7 @@ Auto path so the main request continues normally.
 
 Valid judge decisions are still reused for repeated identical automation turns through a bounded
 process-local cache keyed by Combo, judge execution target, extracted prompt, and routing-context
-digest (one-hour TTL, 1,000 entries). The cache is now secondary protection: neutral requests that
-the normal router can resolve never spend classifier tokens in the first place.
+digest (one-hour TTL, 1,000 entries).
 
 ### Builder Naming and Layout
 
@@ -932,18 +928,29 @@ concerns separate:
 - **capability metadata**: total input size, requested output, message count, and advertised tools
   constrain what a model can execute but do not imply reasoning difficulty.
 
-When deterministic classification remains neutral, Auto first performs the local neutral router
-scoring pass described above. Only if that scoring is still role-neutral can the optional AI Intent
-Classifier receive the bounded context. Its cache key includes a context digest, so identical text
-such as `continue` is rejudged only when the AI tie-breaker is actually needed and recent execution
-state changes. Legacy task-aware fallback ordering consumes the final front role decision: it
+Adaptive Deterministic reports independent `fastScore` and `strongScore` values from `0.000` to
+`1.000`, their absolute `margin`, and each factor's Fast/Strong contribution. Evidence is combined
+with `1 - product(1 - contribution)`, so several signals can reinforce a role without allowing its
+score to exceed `1.000`. These values measure local heuristic evidence only. They do not include
+Advanced Scoring Weights, provider health, quota, latency, cost, concrete-model scores, or the AI
+classifier verdict, and they are not probabilities.
+
+A deterministic role is emitted only when the higher score reaches `minScore=0.350` and the margin
+reaches `minMargin=0.180`. Otherwise the role remains `neutral`; that is the only normal path that
+invokes the configured AI Intent Classifier.
+
+When deterministic classification remains neutral, the optional AI Intent Classifier immediately
+receives the bounded context before the main Auto scoring pass. Its cache key includes a context
+digest, so identical text such as `continue` is rejudged when recent execution state changes.
+Legacy task-aware fallback ordering consumes the final front role decision: it
 retains raw input size for context-window fit but cannot independently promote a Fast request to
 Heavy/Critical because the conversation happens to be long.
 
-Task-aware execution is observable at INFO level on every non-empty task-aware route. Auto logs use
-`scope=fallback-only` and show the protected primary plus ordered fallback tail; legacy task-aware
-strategies that may choose the primary use `scope=primary-and-fallback`. The task level, reasons,
-and conversation cache key remain visible in the same decision line.
+Task-aware execution is observable at INFO level on every non-empty task-aware route. When an
+adaptive role is active, Task-Route uses `scope=selection-and-fallback`, prints its concrete
+`selected` model, and lists the complete ordered pools including that model. Neutral Auto and
+non-adaptive explicit routers may retain a protected selection and report `scope=fallback-only`. The
+task level, reasons, and conversation cache key remain visible in the same decision line.
 
 ---
 
@@ -978,15 +985,15 @@ Adaptive task-route decisions now expose the categorized fallback plan directly 
 Strong Reasoning decision can look like:
 
 ```text
-task-route task=heavy (adaptive-role:strongReasoning) scope=fallback-only \
-primary=<selected-strong-model> \
-fallbackPools=strongReasoning:[<strong-2>,<strong-3>] > fastWorker:[<fast-1>,<fast-2>] > general:[<general-1>] \
-cacheKey=<key>
+[STEP] Adaptive Deterministic : role=neutral | complexity=neutral | fastScore=0.320 | strongScore=0.250 | margin=0.070 | minScore=0.350 | minMargin=0.180 | factors=intent:creative(F=0.150,S=0.250),short-current-request(F=0.200,S=0.000) | signals=intent:creative,short-current-request
+[STEP] AI Intent Classifier : selected | role=strongReasoning | model=<classifier-model>
+[STEP] Adaptive-Router : role=strongReasoning | activePool=strongReasoning | poolSize=3 | intent=creative | task=default | signals=ai-judge:<step-id> | strategy=rules
+[STEP] Task-Route : task=heavy (adaptive-role:strongReasoning) | scope=selection-and-fallback | selected=<selected-strong-model> | pools=strongReasoning:[<selected-strong-model>,<strong-2>,<strong-3>] > fastWorker:[<fast-1>,<fast-2>] > general:[<general-1>] | cacheKey=<key>
 ```
 
 For a Fast Worker request the first two categories reverse. Categories with no surviving target are
-absent from the log. Non-adaptive task-aware strategies keep the legacy flat `fallbacks=...` field,
-so this observability change does not alter their log contract.
+absent from the log. Untiered task-aware routes are displayed as one `general:[...]` pool so their
+complete candidate order is visible through the same log contract.
 
 ### Regression Coverage
 
@@ -1004,32 +1011,26 @@ runner reports them; `status.md` keeps that validation state explicit.
 
 ---
 
-## Neutral Router-Score Gate Before AI Classification
+## Restored 3.8.50 AI Classifier Flow
 
-The neutral path now preserves the intended token-cost hierarchy:
+The neutral path follows the 3.8.50 execution hierarchy:
 
 ```text
 Deterministic Fast/Strong
   → use that role directly
 
 Deterministic neutral
-  → ordinary Auto router scoring, base/effective weights, no role boost
-      → unique Fast top score   → Fast Worker, no AI call
-      → unique Strong top score → Strong Reasoning, no AI call
-      → role-neutral top score  → optional AI Intent Classifier
+  → configured AI Intent Classifier
+      → FAST_WORKER       → Fast Worker role
+      → STRONG_REASONING  → Strong Reasoning role
+      → failure/invalid   → neutral Auto scoring
 ```
 
-A router score is considered role-neutral when the top score band contains a General/unassigned
-candidate, a candidate assigned to both roles, or equally-scored Fast and Strong candidates. The
-comparison uses a small `1e-4` epsilon to absorb floating-point normalization noise without treating
-a meaningfully lower opposing role as a tie.
+The AI call still uses only the configured Combo Step and remains fail-open. It chooses a role, not
+the concrete executor model. The normal Auto scorer prepares the ranked role pools after that role
+is known; Task-Route selects the concrete executor inside the active pool. The categorized fallback
+contract remains Strong → Fast → General or Fast → Strong → General.
 
-The AI branch additionally requires routable candidates in **both** explicit role pools. If one side
-is absent or fully filtered by quota/eligibility, no classifier tokens are spent; neutral Auto
-scoring continues normally. This gate changes only how a missing role preference is resolved. It
-does not alter primary-selection authority, role-specific weight application, or the categorized
-Strong → Fast → General / Fast → Strong → General fallback contract.
-
-Focused regression coverage lives in `tests/unit/autoCombo/adaptiveRoleResolution.test.ts` and locks
-unique Fast/Strong resolution, cross-role ties, General and dual-role neutrality, and the epsilon
-boundary.
+Focused regression coverage in `tests/unit/combo-resolve-auto-strategy-split.test.ts` proves that an
+ordinary Medium request is resolved to Fast without an AI call, while a genuinely neutral request
+calls the classifier exactly once.

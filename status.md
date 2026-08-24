@@ -8,8 +8,8 @@ Status: Completed
 
 #### Repository
 
-- **Branch**: `release/v3.8.50` (HEAD: b754e44e2)
-- **Version**: 3.8.50
+- **Branch**: `codex/adaptive-routing` (3.8.50 compatibility flow restored in working tree)
+- **Version**: 3.8.51
 - **Package Manager**: pnpm (workspaces: `open-sse`, `packages/browser-pool`)
 - **Test Setup**: Node.js native test runner (`node --import tsx/esm --test`) + Vitest (MCP server, autoCombo, cache)
 - **Coverage Gate**: 60% statements/lines/functions/branches (ratchet in `quality-baseline.json`)
@@ -506,7 +506,8 @@ Status: Completed
   - Coding requests split into light, heavy, and neutral signals instead of always selecting Strong.
   - Explicit tool choice or an extracted request of at least 2,000 tokens promotes an otherwise
     ambiguous new request to Strong Reasoning.
-  - Ambiguous `medium` and `creative` requests remain neutral unless a complexity signal exists.
+  - Ordinary `medium` requests accumulate enough Fast evidence to avoid an unnecessary AI call;
+    low-confidence or conflicting requests such as undecided creative work remain neutral.
 - Added Fast Worker and Strong Reasoning suitability factors to the existing Auto-Combo scorer.
   They default to zero and therefore do not affect Combos without an active role preference.
 - Added runtime role-weight activation that reserves a conservative portion of the existing
@@ -664,9 +665,8 @@ Status: Completed
   Steps and a Review summary showing the selected classifier or rules-only mode.
 - The judge receives only the extracted current user request in a small non-streaming request and
   must return exactly `FAST_WORKER` or `STRONG_REASONING`.
-- A valid verdict supplies the role only after deterministic rules and neutral router scoring both
-  remain role-neutral. The existing Auto scorer still chooses the concrete primary model inside the
-  selected worker pool.
+- A valid verdict supplies the role whenever deterministic rules remain neutral. The existing Auto
+  scorer still chooses the concrete primary model inside the selected worker pool.
 - Judge failures, timeouts, invalid output, or missing targets fail open to the neutral Auto path and
   never block the main request.
 - Internal judge calls skip Context Relay and session/account-affinity tracking and use the exact
@@ -685,9 +685,9 @@ Status: Completed
   pool remains a hard primary-selection boundary.
 - Legacy `task-route` and prompt-cache affinity may reorder only Auto's fallback tail. They cannot
   override the primary selected from either an explicit role pool or the general worker pool.
-- AI Intent Classifier is not triggered merely by a neutral deterministic classification. Neutral
-  requests first use local Auto router scoring; only a role-neutral top score can reach the optional
-  classifier, while clear Fast Worker and Strong Reasoning requests bypass the extra model call.
+- AI Intent Classifier follows the 3.8.50 flow: a neutral deterministic classification invokes the
+  configured classifier before the main Auto scoring pass, while clear Fast Worker and Strong
+  Reasoning requests bypass the extra model call.
 - Added light-versus-heavy coding signals: routine formatting, renaming, lookup, and test-running
   prefer Fast Worker; debugging, architecture, refactoring, migrations, and repository-wide work
   prefer Strong Reasoning; ambiguous coding can be resolved by router scoring or the optional judge.
@@ -743,7 +743,7 @@ Status: Completed
 - Deterministic classification still prioritizes the extracted current request. Two recent failed
   tool events can promote an otherwise ambiguous fix/debug/continue automation turn.
 - AI Intent Classifier calls receive the current request plus bounded execution context, not raw
-  conversation history or tool schemas, only after local router scoring also remains role-neutral.
+  conversation history or tool schemas, whenever deterministic classification remains neutral.
   Cache keys include the routing-context digest, preventing a stale Fast verdict from being reused
   after the execution state materially changes.
 - Auto passes its final Fast/Strong decision to legacy fallback ordering. Legacy task routing keeps
@@ -752,10 +752,8 @@ Status: Completed
 - Added structured debug telemetry for current-request tokens, total-input tokens, message/tool
   counts, recent tool activity/failures, and the context digest. Auto selection logs now include the
   concrete classification signals.
-- Task-aware routing now emits an INFO decision line even when Auto protects the selected primary.
-  The line declares `scope=fallback-only`, the protected primary, the ordered fallback tail, task
-  level/reasons, and conversation cache key; non-Auto task-aware routes use
-  `scope=primary-and-fallback`.
+- Task-aware routing emits an INFO decision line with the selected concrete model, complete ordered
+  pools, task level/reasons, scope, and conversation cache key.
 
 #### Validation
 
@@ -779,7 +777,7 @@ Status: Completed
 
 ### Post-Phase 5 — Categorized Adaptive Fallback Pools
 
-Status: Implemented; runtime validation pending
+Status: Implemented and locally validated
 
 - Fixed the reported cross-pool fallback leak by making the adaptive fallback chain explicitly
   categorized. Each resolved target carries request-local worker membership and fallback-tier
@@ -791,49 +789,61 @@ Status: Implemented; runtime validation pending
   tier. It cannot promote a later worker pool or General model ahead of an earlier tier.
 - Prompt-cache affinity obeys the same tier boundary, preventing the post-task-routing cache stage
   from reintroducing cross-pool fallback jumps.
-- General/unassigned models are the final safety pool. Overlapping Fast/Strong membership is
-  deduplicated by execution key and consumed in the first applicable tier.
+- The opposite worker role is the immediate cross-role fallback, matching 3.8.50. General/unassigned
+  models are the final safety pool. Overlapping Fast/Strong membership is deduplicated by execution
+  key and consumed in the first applicable tier.
 - Added focused regression coverage in
   `tests/unit/adaptive-task-routing-pool-boundaries.test.ts` for Strong→Fast→General,
   Fast→Strong→General, task-route tier isolation, and prompt-cache tier isolation.
-- Task-routing INFO logs now expose categorized fallback models as
-  `fallbackPools=<role>:[...] > <role>:[...] > general:[...]`; non-adaptive task-aware routes retain
-  the legacy flat `fallbacks=...` format.
+- Task-routing INFO logs expose every eligible model, including the selected primary, as
+  `selected=<model> pools=<preferred>:[...] > <opposite>:[...] > general:[...]`.
+- Intelligent Auto routing now emits four consistently named trace checkpoints:
+  `[STEP] Adaptive Deterministic`, `[STEP] AI Intent Classifier`,
+  `[STEP] Adaptive-Router`, and `[STEP] Task-Route`. Classifier cache hits, skips, selected roles,
+  and fail-open reasons use the same checkpoint prefix.
 
 #### Validation
 
-- Regression tests were added for the four pool-boundary behaviors above.
-- The repository `Build App` GitHub workflow is configured for pushes to every branch, so these
-  commits automatically request a production build on `codex/adaptive-routing`.
-- This ChatGPT GitHub connection does not expose a command runner or workflow-dispatch/run-list API,
-  so the Node/Vitest/typecheck/lint commands recorded elsewhere in this file have not been
-  re-executed from this session yet. Do not treat this subsection as a green runtime validation
-  until the branch build or a local checkout reports the results.
+- `tests/unit/adaptive-task-routing-pool-boundaries.test.ts`: 4/4 passed.
+- `tests/unit/autoCombo/adaptiveJudge.test.ts`: 4/4 passed.
+- `tests/unit/combo-resolve-auto-strategy-split.test.ts`: 13/13 passed.
+- `tests/unit/combo-target-resolution-split.test.ts`: 8/8 passed.
+- `tests/unit/combo-intelligent-role-pools.test.ts`: 14/14 passed.
+- `npm run typecheck:core`: passed.
 
-### Post-Phase 5 — Neutral Router-Score Gate for AI Intent Classifier
+### Post-Phase 5 — Restored 3.8.50 Adaptive Flow
 
-Status: Implemented; runtime validation pending
+Status: Implemented and locally validated
 
-- Fixed the AI Intent Classifier trigger so a deterministic `neutral` result no longer causes an
-  immediate model call.
-- Neutral requests first reuse the normal Auto `scoreAutoTargets()` path with the effective base
-  router weights and **no adaptive role boost**. This is a local scoring pass and consumes no model
-  tokens.
-- A unique top-scoring Fast Worker or Strong Reasoning Step resolves the role directly and records a
-  `router-score:<role>` signal; the optional AI classifier is skipped.
-- The AI classifier is now a last-resort role tie-breaker only when both Fast Worker and Strong
-  Reasoning pools have routable candidates and the top router score remains role-neutral: a
-  General/unassigned winner, a dual-role winner, or a Fast-versus-Strong score tie within the
-  router-score epsilon.
-- If only one or neither role pool has a routable candidate, the classifier is skipped because it
-  cannot make a meaningful Fast-versus-Strong choice; normal neutral Auto scoring continues.
-- The categorized execution contract is unchanged: Strong → Fast → General and Fast → Strong →
-  General. `task-route` and prompt-cache affinity still cannot cross adaptive fallback tiers.
-- Added `adaptiveRoleResolution.ts` plus focused unit coverage for unique Fast/Strong winners,
-  cross-role ties, General winners, dual-role winners, and near-but-not-tied opposing scores.
+- Restored the 3.8.50 AI Intent Classifier gate: deterministic Fast/Strong decisions bypass the
+  classifier, while a deterministic `neutral` result invokes the configured classifier immediately
+  before the main Auto scoring pass.
+- Removed the intermediate neutral router-score resolver and its routable-both-pools requirement.
+  Classifier failures, invalid verdicts, and timeouts still fail open to neutral Auto routing.
+- Restored 3.8.50 fallback precedence while retaining request-local tier protection:
+  Strong → Fast → General and Fast → Strong → General.
+- `task-route` and prompt-cache affinity may rank models inside a tier but cannot violate that
+  fallback precedence.
+- Adaptive-Router now reports only `role`, `activePool`, and `poolSize`; it does not claim a
+  concrete model selection. Task-Route owns the final concrete model choice inside the active pool.
+- Removed the untagged Auto-primary prepend that allowed Task-Route to mistake the scorer's model
+  for a General candidate. Every adaptive worker handed downstream now retains its pool tier.
+- Task-Route logs the complete ordered execution plan, including the selected model, rather than
+  hiding the selected executor from the categorized pool list.
+- Retained the four structured trace checkpoints: `[STEP] Adaptive Deterministic`,
+  `[STEP] AI Intent Classifier`, `[STEP] Adaptive-Router`, and `[STEP] Task-Route`.
+- Adaptive Deterministic now compares independent `fastScore` and `strongScore` values, requiring
+  both a minimum winning score (`0.350`) and minimum margin (`0.180`) before selecting a role.
+  Ordinary Medium requests therefore resolve to Fast locally, while low-confidence or conflicting
+  evidence remains neutral and alone reaches the optional AI classifier.
+- The checkpoint also emits `margin`, thresholds, and per-factor Fast/Strong contributions. These
+  are diagnostic heuristic evidence, not Advanced Scoring Weights, concrete-model ranking, or
+  probabilities.
+- All four checkpoint logs use `|` field separators. Adaptive-Router does not expose a model or
+  model-ranking score; Task-Route is the single owner of the `selected` model and complete `pools`
+  execution plan.
 
 #### Validation
 
-- Source and regression tests are committed on `codex/adaptive-routing`.
-- Runtime tests/typechecks/build have not been executed by this GitHub-editing session; run the
-  focused Node test and repository validation locally before treating this change as fully green.
+- Focused adaptive routing regression suite: 68 passed, 0 failed.
+- `npm run typecheck:core`: passed after the dual-score restoration.

@@ -31,6 +31,7 @@ test("judge verdict parser only accepts the two routing labels", () => {
 test("AI Judger dispatches only the extracted request to the selected Combo Step", async () => {
   let receivedBody: Record<string, unknown> | null = null;
   let receivedTarget: unknown = null;
+  const infoLogs: string[] = [];
   const result = await runAdaptiveJudge({
     prompt: "prove this theorem",
     target: judgeTarget,
@@ -40,7 +41,13 @@ test("AI Judger dispatches only the extracted request to the selected Combo Step
       assert.equal(modelStr, "judge/judge-model");
       return Response.json({ choices: [{ message: { content: "STRONG_REASONING" } }] });
     },
-    log: { info() {}, warn() {}, debug() {} },
+    log: {
+      info(_tag, message) {
+        infoLogs.push(String(message));
+      },
+      warn() {},
+      debug() {},
+    },
   });
 
   assert.equal(result, "strongReasoning");
@@ -49,6 +56,9 @@ test("AI Judger dispatches only the extracted request to the selected Combo Step
   assert.equal(receivedBody?.stream, false);
   assert.equal(receivedBody?._omnirouteInternalRequest, "adaptive-judge");
   assert.match(JSON.stringify(receivedBody?.messages), /prove this theorem/);
+  assert.deepEqual(infoLogs, [
+    "[STEP] AI Intent Classifier : selected | role=strongReasoning | model=judge/judge-model",
+  ]);
 });
 
 test("AI Judger fails open to the deterministic classifier", async () => {

@@ -147,7 +147,10 @@ export async function runAdaptiveJudge(options: {
   log: ComboLogger;
 }): Promise<AdaptiveJudgeVerdict | null> {
   const { prompt, target, cacheScope, routingContext, handleSingleModel, log } = options;
-  if (!prompt.trim()) return null;
+  if (!prompt.trim()) {
+    log.info("COMBO", "[STEP] AI Intent Classifier : skipped | reason=empty-request");
+    return null;
+  }
   const cacheKey = resolveJudgeDecisionCacheKey(
     cacheScope,
     prompt,
@@ -158,7 +161,7 @@ export async function runAdaptiveJudge(options: {
   if (cachedVerdict) {
     log.info(
       "COMBO",
-      `Adaptive AI Intent Classifier reused ${cachedVerdict} via ${target.modelStr}`
+      `[STEP] AI Intent Classifier : reused | role=${cachedVerdict} | model=${target.modelStr}`
     );
     return cachedVerdict;
   }
@@ -186,7 +189,7 @@ export async function runAdaptiveJudge(options: {
     if (!response.ok) {
       log.warn(
         "COMBO",
-        `Adaptive AI Intent Classifier failed with HTTP ${response.status}; using rules`
+        `[STEP] AI Intent Classifier : fallback=rules | reason=http-${response.status} | model=${target.modelStr}`
       );
       return null;
     }
@@ -205,14 +208,23 @@ export async function runAdaptiveJudge(options: {
 
     const verdict = parseAdaptiveJudgeVerdict(content);
     if (!verdict) {
-      log.warn("COMBO", "Adaptive AI Intent Classifier returned an invalid verdict; using rules");
+      log.warn(
+        "COMBO",
+        `[STEP] AI Intent Classifier : fallback=rules | reason=invalid-verdict | model=${target.modelStr}`
+      );
       return null;
     }
-    log.info("COMBO", `Adaptive AI Intent Classifier selected ${verdict} via ${target.modelStr}`);
+    log.info(
+      "COMBO",
+      `[STEP] AI Intent Classifier : selected | role=${verdict} | model=${target.modelStr}`
+    );
     if (cacheKey) writeJudgeDecision(cacheKey, verdict);
     return verdict;
   } catch {
-    log.warn("COMBO", "Adaptive AI Intent Classifier dispatch failed; using rules");
+    log.warn(
+      "COMBO",
+      `[STEP] AI Intent Classifier : fallback=rules | reason=dispatch-failed | model=${target.modelStr}`
+    );
     return null;
   }
 }

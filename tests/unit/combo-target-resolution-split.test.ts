@@ -115,7 +115,7 @@ test("an empty combo yields an empty target pool (combo.ts turns it into a 404)"
   assert.deepEqual(result.orderedTargets, []);
 });
 
-test("auto keeps its adaptive primary when legacy task routing sees many advertised tools", async () => {
+test("task-route selects inside the adaptive pool and logs the complete pool including selection", async () => {
   const lightning = "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b";
   const ultra = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
   const infoMessages: string[] = [];
@@ -178,10 +178,10 @@ test("auto keeps its adaptive primary when legacy task routing sees many adverti
   assert.equal(
     result.orderedTargets[0]?.modelStr,
     lightning,
-    "legacy many-tools-large-context routing must not replace Auto's selected primary"
+    "Task-Route must select from the Fast Worker pool chosen by Adaptive-Router"
   );
   assert.equal(result.orderedTargets[1]?.modelStr, ultra, "Ultra remains the first fallback");
-  const taskRouteLog = infoMessages.find((message) => message.startsWith("task-route "));
+  const taskRouteLog = infoMessages.find((message) => message.startsWith("[STEP] Task-Route : "));
   assert.ok(
     taskRouteLog,
     `expected task-route observability log, got: ${infoMessages.join(" | ")}`
@@ -189,9 +189,89 @@ test("auto keeps its adaptive primary when legacy task routing sees many adverti
   assert.match(
     taskRouteLog,
     new RegExp(
-      `^task-route task=light \\(adaptive-role:fastWorker\\) scope=fallback-only ` +
-        `primary=${lightning} fallbacks=${ultra} cacheKey=[a-f0-9]+$`
+      `^\\[STEP\\] Task-Route : task=light \\(adaptive-role:fastWorker\\) \\| ` +
+        `scope=selection-and-fallback \\| selected=${lightning} \\| ` +
+        `pools=fastWorker:\\[${lightning}\\] > strongReasoning:\\[${ultra}\\] \\| ` +
+        `cacheKey=[a-f0-9]+$`
     )
+  );
+});
+
+test("task-route, not adaptive scoring, chooses the concrete model inside a Strong pool", async () => {
+  const code = "mistral/mistral-code-latest";
+  const ultra = "nvidia/nvidia/nemotron-3-ultra-550b-a55b";
+  const fast = "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b";
+  const infoMessages: string[] = [];
+  const result = await resolveComboTargetPipeline(
+    deps({
+      log: {
+        ...noopLog,
+        info(_tag: unknown, message: unknown) {
+          infoMessages.push(String(message));
+        },
+      },
+      strategy: "auto",
+      combo: {
+        id: "adaptive-pool-task-route-authority",
+        name: "adaptive-pool-task-route-authority",
+        models: [
+          { id: "code-step", model: code },
+          { id: "ultra-step", model: ultra },
+          { id: "fast-step", model: fast },
+        ],
+        autoConfig: {
+          candidatePool: ["mistral", "nvidia"],
+          explorationRate: 0,
+          modePack: "ship-fast",
+          fastWorkerModelRefs: ["fast-step"],
+          strongReasoningModelRefs: ["code-step", "ultra-step"],
+        },
+      },
+      config: { compatFilterFailOpen: true },
+      body: {
+        messages: [{ role: "user", content: "Prove this theorem step by step." }],
+      },
+      buildAutoCandidates: async (targets: Array<Record<string, unknown>>) =>
+        targets.map((target) => ({
+          ...target,
+          model: String(target.modelStr).split("/").slice(1).join("/"),
+          quotaRemaining: 100,
+          quotaTotal: 100,
+          circuitBreakerState: "CLOSED",
+          costPer1MTokens: 1,
+          p95LatencyMs: 100,
+          latencyStdDev: 10,
+          errorRate: 0,
+        })),
+    })
+  );
+
+  assert.ok(!("earlyResponse" in result));
+  if ("earlyResponse" in result) return;
+  assert.equal(
+    result.orderedTargets[0]?.modelStr,
+    ultra,
+    "Task-Route should rank concrete executors inside the active Strong pool"
+  );
+  assert.deepEqual(
+    result.orderedTargets.map((target) => target.modelStr),
+    [ultra, code, fast],
+    "the active Strong pool must be exhausted before Fast Worker fallback"
+  );
+
+  const adaptiveLog = infoMessages.find((message) =>
+    message.startsWith("[STEP] Adaptive-Router : ")
+  );
+  assert.ok(adaptiveLog);
+  assert.match(adaptiveLog, /role=strongReasoning \| activePool=strongReasoning \| poolSize=2/);
+  assert.doesNotMatch(adaptiveLog, /selected=/);
+
+  const taskRouteLog = infoMessages.find((message) => message.startsWith("[STEP] Task-Route : "));
+  assert.ok(taskRouteLog);
+  assert.match(taskRouteLog, new RegExp(`selected=${ultra}`));
+  assert.match(
+    taskRouteLog,
+    new RegExp(`pools=strongReasoning:\\[${ultra},${code}\\] > fastWorker:\\[${fast}\\]`)
   );
 });
 

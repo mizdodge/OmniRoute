@@ -400,8 +400,8 @@ export function applyPromptCacheAffinity(
   } else {
     // Global affinity stays global for normal strategies. Adaptive Auto targets
     // carry fallback-tier metadata, so rendezvous ranking may move accounts/models
-    // only inside that tier and can never promote Fast/General ahead of Strong (or
-    // vice versa for a Fast-preferred request).
+    // only inside that tier and can never violate the 3.8.50 adaptive order:
+    // preferred worker -> opposite worker -> General.
     const hasAdaptiveTiers = ranked.some((entry) => entry.adaptiveTier !== null);
     ranked.sort((a, b) => {
       if (hasAdaptiveTiers) {

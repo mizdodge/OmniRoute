@@ -86,16 +86,10 @@ export function resolveRolePoolCandidates(
   // assigns that same Step to Fast Worker or Strong Reasoning explicitly.
   const all = dedupeTargets(eligibleTargets)
     .filter((target) => !judgeRef || judgeIsWorker || target.stepId !== judgeRef)
-    .map(
-      (target): AdaptiveClassifiedTarget => ({
-        ...target,
-        _omnirouteAdaptiveWorkerMembership: resolveMembership(
-          target.stepId,
-          fastRefs,
-          strongRefs
-        ),
-      })
-    );
+    .map((target): AdaptiveClassifiedTarget => ({
+      ...target,
+      _omnirouteAdaptiveWorkerMembership: resolveMembership(target.stepId, fastRefs, strongRefs),
+    }));
 
   return {
     fastWorker: all.filter((target) => fastRefs.has(target.stepId)),
@@ -122,10 +116,10 @@ export function resolveAdaptiveJudgeTarget(
 }
 
 /**
- * Build explicit fallback classes for one adaptive request. The selected role is
- * exhausted first, then the opposite worker role, and General/unassigned models
- * are always the final safety pool. A target assigned to both roles is consumed
- * in the preferred tier and deduplicated before the alternate tier executes.
+ * Build the 3.8.50 fallback classes for one adaptive request. The selected role is
+ * exhausted first, then the opposite worker role, and finally General/unassigned
+ * models. A target assigned to both roles is consumed in the preferred tier and
+ * deduplicated before the alternate tier executes.
  */
 export function buildRolePoolFallbackTiers(
   pools: ResolvedRolePoolCandidates,
@@ -171,8 +165,7 @@ export function buildRolePoolFailoverOrder(
   });
 
   // Preserve legacy/malformed callers that placed a target only in `all`, but
-  // force those extras into the final General tier so they can never jump ahead
-  // of configured Fast/Strong worker pools.
+  // force those extras into the final General tier.
   for (const target of pools.all) {
     if (seen.has(target.executionKey)) continue;
     seen.add(target.executionKey);

@@ -599,13 +599,14 @@ function applyTaskAwareOrdering(
       : legacyTask;
   const conversationCacheKey = getConversationCacheKey(body);
   const taskReordered = reorderByTaskWeight(orderedTargets, task);
-  // Auto has already classified and scored the request before this legacy layer.
-  // Keep its primary choice for both the rules router and explicit sub-routers;
-  // task-aware routing may refine only the fallback tail. Otherwise structural
-  // client metadata (for example, many advertised IDE tools plus a large system
-  // prompt) can silently replace an adaptive Fast Worker selection with Ultra.
+  // Adaptive Auto owns the role/pool decision; Task-Route owns the concrete
+  // executor inside that active pool. Tier metadata keeps Task-Route from moving
+  // a lower-priority role ahead of the role chosen by Adaptive. Neutral Auto and
+  // non-adaptive explicit routers retain their legacy pinned primary.
   // reorderByTaskWeight returns the same target objects, so identity filtering is safe.
-  const preserveAutoPrimary = strategy === "auto" || autoUsedExplicitRouter;
+  const adaptiveRoleActive = strategy === "auto" && adaptiveTask?.preferredRole != null;
+  const preserveAutoPrimary =
+    !adaptiveRoleActive && (strategy === "auto" || autoUsedExplicitRouter);
   const pinnedFirst = preserveAutoPrimary ? orderedTargets[0] : undefined;
   const nextOrder = pinnedFirst
     ? [pinnedFirst, ...taskReordered.filter((t) => t !== pinnedFirst)]
@@ -613,33 +614,30 @@ function applyTaskAwareOrdering(
   if (nextOrder.length > 0) {
     const reasons =
       Array.isArray(task.reasons) && task.reasons.length > 0 ? ` (${task.reasons.join(",")})` : "";
-    const scope = pinnedFirst ? "fallback-only" : "primary-and-fallback";
-    const primary = nextOrder[0]?.modelStr ?? "none";
-    const fallbackTargets = nextOrder.slice(1);
-    const flatFallbacks = fallbackTargets.map((target) => target.modelStr).join(",");
-    const fallbackGroups = new Map<string, string[]>();
-    const fallbackGroupOrder: string[] = [];
-    for (const target of fallbackTargets) {
+    const scope = pinnedFirst ? "fallback-only" : "selection-and-fallback";
+    const selected = nextOrder[0]?.modelStr ?? "none";
+    const poolGroups = new Map<string, string[]>();
+    const poolGroupOrder: string[] = [];
+    for (const target of nextOrder) {
       const fallbackClass = (
         target as ResolvedComboTarget & { _omnirouteAdaptiveFallbackClass?: unknown }
       )._omnirouteAdaptiveFallbackClass;
-      if (typeof fallbackClass !== "string" || !fallbackClass) continue;
-      if (!fallbackGroups.has(fallbackClass)) {
-        fallbackGroups.set(fallbackClass, []);
-        fallbackGroupOrder.push(fallbackClass);
+      const poolClass =
+        typeof fallbackClass === "string" && fallbackClass ? fallbackClass : "general";
+      if (!poolGroups.has(poolClass)) {
+        poolGroups.set(poolClass, []);
+        poolGroupOrder.push(poolClass);
       }
-      fallbackGroups.get(fallbackClass)!.push(target.modelStr);
+      poolGroups.get(poolClass)!.push(target.modelStr);
     }
-    const categorizedFallbacks = fallbackGroupOrder
-      .map((fallbackClass) => `${fallbackClass}:[${fallbackGroups.get(fallbackClass)!.join(",")}]`)
+    const categorizedPools = poolGroupOrder
+      .map((poolClass) => `${poolClass}:[${poolGroups.get(poolClass)!.join(",")}]`)
       .join(" > ");
-    const fallbackLog = categorizedFallbacks
-      ? `fallbackPools=${categorizedFallbacks}`
-      : `fallbacks=${flatFallbacks || "none"}`;
     log.info(
       "COMBO",
-      `task-route task=${task.level}${reasons} scope=${scope} primary=${primary} ` +
-        `${fallbackLog} cacheKey=${conversationCacheKey ?? "none"}`
+      `[STEP] Task-Route : task=${task.level}${reasons} | scope=${scope} | ` +
+        `selected=${selected} | pools=${categorizedPools || "none"} | ` +
+        `cacheKey=${conversationCacheKey ?? "none"}`
     );
   }
   return nextOrder;

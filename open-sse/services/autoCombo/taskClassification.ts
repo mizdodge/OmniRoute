@@ -3,9 +3,20 @@ import type { FrontRoutingContext } from "./routingContext.ts";
 
 export type AdaptiveRolePreference = "fastWorker" | "strongReasoning" | null;
 
+export type AdaptiveRoleScores = {
+  fastWorker: number;
+  strongReasoning: number;
+};
+
 export type AdaptiveTaskClassification = {
   complexity: "simple" | "complex" | "neutral";
   preferredRole: AdaptiveRolePreference;
+  /** Independent deterministic evidence scores used to choose the adaptive role. */
+  scores: AdaptiveRoleScores;
+  /** Absolute distance between the Fast and Strong scores. */
+  margin: number;
+  /** Per-signal contributions to each adaptive role score. */
+  factorScores: Record<string, AdaptiveRoleScores>;
   signals: string[];
 };
 
@@ -15,6 +26,72 @@ const LIGHT_CODE_RE =
   /\b(format|formatter|lint|rename|typo|comment|read|search|find|status|one[- ]?line|small change|quick fix|run (?:the )?tests?|check (?:the )?tests?)\b/i;
 const HEAVY_CODE_RE =
   /\b(debug|root cause|architecture|architectural|refactor|migrate|migration|implement(?:ation)?|design|investigate|trace|multi[- ]?file|multiple files|codebase|repository|repo[- ]?wide|security|vulnerability|race condition|deadlock|performance regression)\b/i;
+
+export const ADAPTIVE_ROLE_MIN_SCORE = 0.35;
+export const ADAPTIVE_ROLE_MIN_MARGIN = 0.18;
+
+const NO_ROLE_SCORE: AdaptiveRoleScores = { fastWorker: 0, strongReasoning: 0 };
+
+const DETERMINISTIC_FACTOR_WEIGHT = {
+  simpleIntent: { fastWorker: 0.75, strongReasoning: 0 },
+  mediumIntent: { fastWorker: 0.35, strongReasoning: 0 },
+  creativeIntent: { fastWorker: 0.15, strongReasoning: 0.25 },
+  codeIntent: { fastWorker: 0.25, strongReasoning: 0.25 },
+  complexIntent: { fastWorker: 0, strongReasoning: 0.8 },
+  shortCurrentRequest: { fastWorker: 0.2, strongReasoning: 0 },
+  substantialCurrentRequest: { fastWorker: 0, strongReasoning: 0.35 },
+  longCurrentRequest: { fastWorker: 0, strongReasoning: 0.65 },
+  explicitToolChoice: { fastWorker: 0, strongReasoning: 0.6 },
+  highReasoningEffort: { fastWorker: 0, strongReasoning: 0.85 },
+  repeatedFailures: { fastWorker: 0, strongReasoning: 0.75 },
+  heavyCode: { fastWorker: 0, strongReasoning: 0.75 },
+  lightCode: { fastWorker: 0.75, strongReasoning: 0 },
+} as const;
+
+function roundScore(value: number): number {
+  return Math.round(value * 1_000) / 1_000;
+}
+
+function combineRoleEvidence(
+  factorScores: Record<string, AdaptiveRoleScores>,
+  role: keyof AdaptiveRoleScores
+): number {
+  const remainingUncertainty = Object.values(factorScores).reduce(
+    (remaining, contribution) => remaining * (1 - contribution[role]),
+    1
+  );
+  return roundScore(1 - remainingUncertainty);
+}
+
+function classification(
+  factorScores: Record<string, AdaptiveRoleScores>
+): AdaptiveTaskClassification {
+  const scores = {
+    fastWorker: combineRoleEvidence(factorScores, "fastWorker"),
+    strongReasoning: combineRoleEvidence(factorScores, "strongReasoning"),
+  };
+  const margin = roundScore(Math.abs(scores.fastWorker - scores.strongReasoning));
+  const winnerScore = Math.max(scores.fastWorker, scores.strongReasoning);
+  const preferredRole: AdaptiveRolePreference =
+    winnerScore < ADAPTIVE_ROLE_MIN_SCORE || margin < ADAPTIVE_ROLE_MIN_MARGIN
+      ? null
+      : scores.fastWorker > scores.strongReasoning
+        ? "fastWorker"
+        : "strongReasoning";
+  return {
+    complexity:
+      preferredRole === "fastWorker"
+        ? "simple"
+        : preferredRole === "strongReasoning"
+          ? "complex"
+          : "neutral",
+    preferredRole,
+    scores,
+    margin,
+    factorScores,
+    signals: Object.keys(factorScores),
+  };
+}
 
 function isAutomationContinuation(body: Record<string, unknown> | null | undefined): boolean {
   if (!Array.isArray(body?.messages)) return false;
@@ -52,40 +129,64 @@ export function classifyAdaptiveTask(
   prompt = "",
   routingContext?: FrontRoutingContext
 ): AdaptiveTaskClassification {
-  const signals: string[] = [];
+  const factorScores: Record<string, AdaptiveRoleScores> = {};
   const automationContinuation =
     routingContext?.execution.isContinuation ?? isAutomationContinuation(body);
-  const effort = routingContext?.execution.reasoningEffort ?? "";
+  const reasoning = body?.reasoning;
+  const bodyEffort = String(
+    body?.reasoning_effort ??
+      (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
+        ? (reasoning as Record<string, unknown>).effort
+        : "") ??
+      ""
+  ).toLowerCase();
+  const effort = routingContext?.execution.reasoningEffort ?? bodyEffort;
   const highEffort = /^(high|xhigh|max|maximum|hard|deep)$/.test(effort);
 
-  if (COMPLEX_INTENTS.has(intent)) signals.push(`intent:${intent}`);
-  if (!automationContinuation && hasExplicitToolChoice(body)) signals.push("explicit-tool-choice");
-  if (estimatedInputTokens >= 2_000) signals.push("long-current-request");
-  if (highEffort) signals.push("high-reasoning-effort");
+  if (intent === "simple") {
+    factorScores["intent:simple"] = DETERMINISTIC_FACTOR_WEIGHT.simpleIntent;
+  } else if (intent === "medium") {
+    factorScores["intent:medium"] = DETERMINISTIC_FACTOR_WEIGHT.mediumIntent;
+  } else if (intent === "creative") {
+    factorScores["intent:creative"] = DETERMINISTIC_FACTOR_WEIGHT.creativeIntent;
+  } else if (intent === "code") {
+    factorScores["intent:code"] = DETERMINISTIC_FACTOR_WEIGHT.codeIntent;
+  }
+  if (COMPLEX_INTENTS.has(intent)) {
+    factorScores[`intent:${intent}`] = DETERMINISTIC_FACTOR_WEIGHT.complexIntent;
+  }
+  if (!automationContinuation && hasExplicitToolChoice(body)) {
+    factorScores["explicit-tool-choice"] = DETERMINISTIC_FACTOR_WEIGHT.explicitToolChoice;
+  }
+  if (prompt.trim() && estimatedInputTokens > 0 && estimatedInputTokens <= 256) {
+    factorScores["short-current-request"] = DETERMINISTIC_FACTOR_WEIGHT.shortCurrentRequest;
+  } else if (estimatedInputTokens >= 2_000) {
+    factorScores["long-current-request"] = DETERMINISTIC_FACTOR_WEIGHT.longCurrentRequest;
+  } else if (estimatedInputTokens >= 512) {
+    factorScores["substantial-current-request"] =
+      DETERMINISTIC_FACTOR_WEIGHT.substantialCurrentRequest;
+  }
+  if (highEffort) {
+    factorScores["high-reasoning-effort"] = DETERMINISTIC_FACTOR_WEIGHT.highReasoningEffort;
+  }
   if (
     automationContinuation &&
     (routingContext?.execution.recentFailures ?? 0) >= 2 &&
     /\b(fix|debug|investigate|trace|resolve|continue|lanjut|perbaiki)\b/i.test(prompt)
   ) {
-    signals.push("continuation:repeated-failures");
+    factorScores["continuation:repeated-failures"] = DETERMINISTIC_FACTOR_WEIGHT.repeatedFailures;
   }
 
-  if (signals.length > 0) {
-    return { complexity: "complex", preferredRole: "strongReasoning", signals };
-  }
   if (intent === "code") {
     if (HEAVY_CODE_RE.test(prompt)) {
-      return { complexity: "complex", preferredRole: "strongReasoning", signals: ["code:heavy"] };
+      factorScores["code:heavy"] = DETERMINISTIC_FACTOR_WEIGHT.heavyCode;
+    } else if (LIGHT_CODE_RE.test(prompt)) {
+      factorScores["code:light"] = DETERMINISTIC_FACTOR_WEIGHT.lightCode;
     }
-    if (LIGHT_CODE_RE.test(prompt)) {
-      return { complexity: "simple", preferredRole: "fastWorker", signals: ["code:light"] };
-    }
-    return { complexity: "neutral", preferredRole: null, signals: ["intent:code"] };
   }
-  if (intent === "simple") {
-    return { complexity: "simple", preferredRole: "fastWorker", signals: ["intent:simple"] };
-  }
-  return { complexity: "neutral", preferredRole: null, signals: [`intent:${intent}`] };
+  return classification(
+    Object.keys(factorScores).length > 0 ? factorScores : { none: NO_ROLE_SCORE }
+  );
 }
 
 /** Mode packs reserve a conservative fraction of the total score for role fit. */
