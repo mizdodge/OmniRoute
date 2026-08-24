@@ -336,6 +336,25 @@ No combo to create. Set your model to `auto` (or a variant) and OmniRoute builds
 
 ##
 
+### 🧠 Adaptive workers — fast when it can be, strong when it should be
+
+Intelligent Auto Combos can split their model Steps into **Fast Worker** and **Strong Reasoning**
+pools. OmniRoute scores the current request for both roles before choosing the concrete model, so
+routine chat and lightweight coding stay fast while debugging, architecture, planning, and deep
+reasoning reach the stronger pool.
+
+<table>
+  <tr><th align="left">Stage</th><th align="left">What happens</th></tr>
+  <tr><td align="left" nowrap>1. Deterministic classifier</td><td align="left">Compares independent Fast and Strong evidence from the current request and bounded execution context — long IDE history or a large tool catalog cannot force Strong by themselves.</td></tr>
+  <tr><td align="left" nowrap>2. Optional AI Intent Classifier</td><td align="left">Runs only when the deterministic result is genuinely neutral or conflicting; clear Fast / Strong decisions add no extra model call.</td></tr>
+  <tr><td align="left" nowrap>3. Role-aware scoring</td><td align="left">Advanced Scoring Weights rank eligible models inside the active worker pool; the classifier chooses the role, not the final model.</td></tr>
+  <tr><td align="left" nowrap>4. Tier-safe fallback</td><td align="left">Fast → Strong → General, or Strong → Fast → General. Task routing and cache affinity can reorder within a tier, never jump across it.</td></tr>
+</table>
+
+<sub>📖 [Adaptive role pools, classifier flow & scoring](docs/routing/AUTO-COMBO.md#adaptive-model-roles)</sub>
+
+##
+
 ### 🔀 Or build your own — 19 routing strategies
 
 All **19** strategies — mix & match per combo step:
@@ -540,8 +559,9 @@ the current catalog at **[radar.omniroute.online/planos](https://radar.omniroute
 
 </div>
 
-> Recent highlights from **v3.8.20 → v3.8.50**. Full history in [`CHANGELOG.md`](CHANGELOG.md).
+> Recent highlights from **v3.8.20 → v3.8.51**. Full history in [`CHANGELOG.md`](CHANGELOG.md).
 
+- **🧠 Adaptive Fast / Strong workers** — Intelligent Auto Combos compare deterministic Fast Worker and Strong Reasoning scores first, call an optional AI Intent Classifier only for neutral or conflicting requests, apply role-specific Advanced Scoring Weights, and preserve tier-safe fallback. → [Auto-Combo](docs/routing/AUTO-COMBO.md#adaptive-model-roles)
 - **🎛️ OmniConductor** — inbound A2A delegation to your agent fleet, Conductor skills on the Agent Card, and a dashboard panel with Faro push-to-talk voice chat. → [A2A Server](docs/frameworks/A2A-SERVER.md)
 - **🛂 Adaptive admission & overload protection** — heavyweight chat requests queue instead of 503ing, with atomic RPM rolling leases per connection. → [Resilience Guide](docs/architecture/RESILIENCE_GUIDE.md)
 - **🗂️ Canonical `/v1/models` ordering** — one contiguous provider-grouped block per provider (combos pinned first), stable across every catalog source. → [API Reference](docs/reference/API_REFERENCE.md)
