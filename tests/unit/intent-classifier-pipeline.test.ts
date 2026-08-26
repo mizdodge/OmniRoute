@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 const {
   classifyPromptIntent,
   classifyWithConfig,
+  classifyWithConfigDetailed,
   DEFAULT_INTENT_CONFIG,
+  MIN_DETERMINISTIC_INTENT_CONFIDENCE,
   MATH_KEYWORDS,
   CREATIVE_KEYWORDS,
   CODE_KEYWORDS,
@@ -127,6 +129,74 @@ test("classifyWithConfig respects simpleMaxWords override", () => {
   const longerPrompt =
     "what is the significance of the american revolution and how did it shape modern democracy in ways that continue to influence politics today across the world and across generations of people who value freedom and self-governance";
   assert.equal(classifyWithConfig(longerPrompt, config), "medium");
+});
+
+test("deterministic intent classification recognizes Indonesian Fast and Strong requests", () => {
+  const fast = classifyWithConfigDetailed("Tolong ringkas teks ini.", DEFAULT_INTENT_CONFIG);
+  const strong = classifyWithConfigDetailed(
+    "Selidiki akar penyebab kegagalan ini dan buktikan solusi yang paling tepat.",
+    DEFAULT_INTENT_CONFIG
+  );
+
+  assert.equal(fast.type, "simple");
+  assert.equal(fast.recognized, true);
+  assert.ok(fast.confidence >= MIN_DETERMINISTIC_INTENT_CONFIDENCE);
+  assert.match(fast.signals.join(","), /keyword:simple:ringkas/);
+
+  assert.equal(strong.type, "reasoning");
+  assert.equal(strong.recognized, true);
+  assert.ok(strong.confidence >= MIN_DETERMINISTIC_INTENT_CONFIDENCE);
+  assert.match(strong.signals.join(","), /keyword:reasoning:/);
+});
+
+test("unrecognized Indonesian intent requests the AI classifier instead of defaulting to Medium", () => {
+  const result = classifyWithConfigDetailed(
+    "Menurut kamu bagaimana hasil ini?",
+    DEFAULT_INTENT_CONFIG
+  );
+
+  assert.equal(result.type, "medium");
+  assert.equal(result.recognized, false);
+  assert.ok(result.confidence < MIN_DETERMINISTIC_INTENT_CONFIDENCE);
+  assert.equal(result.shouldUseAiClassifier, true);
+  assert.equal(result.reason, "unrecognized-intent");
+  assert.ok(result.signals.includes("unrecognized-intent"));
+  assert.equal(result.language.primary, "id");
+});
+
+test("a language without built-in keywords requests the AI classifier", () => {
+  const result = classifyWithConfigDetailed(
+    "ช่วยตรวจสอบเรื่องนี้อย่างละเอียด",
+    DEFAULT_INTENT_CONFIG
+  );
+
+  assert.equal(result.type, "medium");
+  assert.equal(result.recognized, false);
+  assert.equal(result.shouldUseAiClassifier, true);
+  assert.equal(result.reason, "unsupported-language");
+  assert.ok(result.signals.includes("unsupported-language"));
+  assert.equal(result.language.supported, false);
+});
+
+test("a casual marker cannot hide an unsupported-language request", () => {
+  const result = classifyWithConfigDetailed(
+    "hello, ช่วยตรวจสอบเรื่องนี้อย่างละเอียด",
+    DEFAULT_INTENT_CONFIG
+  );
+
+  assert.equal(result.type, "medium");
+  assert.equal(result.reason, "unsupported-language");
+  assert.equal(result.shouldUseAiClassifier, true);
+});
+
+test("disabled and empty deterministic classification do not force an AI call", () => {
+  const disabled = classifyWithConfigDetailed("ambiguous work", { enabled: false });
+  const empty = classifyWithConfigDetailed("", DEFAULT_INTENT_CONFIG);
+
+  assert.equal(disabled.shouldUseAiClassifier, false);
+  assert.ok(disabled.signals.includes("classifier-disabled"));
+  assert.equal(empty.shouldUseAiClassifier, false);
+  assert.ok(empty.signals.includes("empty-request"));
 });
 
 // --- Keyword arrays are exported and non-empty ---

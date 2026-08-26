@@ -25,6 +25,11 @@ test("judge verdict parser only accepts the two routing labels", () => {
   assert.equal(parseAdaptiveJudgeVerdict("FAST_WORKER"), "fastWorker");
   assert.equal(parseAdaptiveJudgeVerdict("```\nSTRONG_REASONING\n```"), "strongReasoning");
   assert.equal(parseAdaptiveJudgeVerdict('{"verdict":"strong_reasoning"}'), "strongReasoning");
+  assert.equal(
+    parseAdaptiveJudgeVerdict('{"verdict":"fast_worker","confidence":0.01}'),
+    "fastWorker",
+    "AI self-confidence is deliberately ignored because it is not calibrated to heuristic scores"
+  );
   assert.equal(parseAdaptiveJudgeVerdict("Maybe use the faster model"), null);
 });
 
@@ -57,7 +62,7 @@ test("AI Judger dispatches only the extracted request to the selected Combo Step
   assert.equal(receivedBody?._omnirouteInternalRequest, "adaptive-judge");
   assert.match(JSON.stringify(receivedBody?.messages), /prove this theorem/);
   assert.deepEqual(infoLogs, [
-    "[STEP] AI Intent Classifier : selected | role=strongReasoning | model=judge/judge-model",
+    "[STEP] AI Intent Classifier : selected | role=strongReasoning | reason=deterministic-uncertain | model=judge/judge-model",
   ]);
 });
 

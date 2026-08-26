@@ -11,6 +11,10 @@ import {
   classifyAdaptiveTask,
   getAdaptiveRoleWeight,
 } from "@omniroute/open-sse/services/autoCombo/taskClassification.ts";
+import {
+  classifyWithConfigDetailed,
+  DEFAULT_INTENT_CONFIG,
+} from "@omniroute/open-sse/services/intentClassifier.ts";
 
 const neutralFactors: ScoringFactors = {
   quota: 0.5,
@@ -39,6 +43,9 @@ test("simple intent prefers Fast Worker when no complex request signal is presen
       "intent:simple": { fastWorker: 0.75, strongReasoning: 0 },
       "short-current-request": { fastWorker: 0.2, strongReasoning: 0 },
     },
+    decisionSource: "deterministic",
+    decisionReason: "recognized-simple-intent",
+    requiresAiClassifier: false,
     signals: ["intent:simple", "short-current-request"],
   });
 });
@@ -165,6 +172,30 @@ test("ordinary medium prefers Fast while creative ambiguity remains neutral", ()
     classifyAdaptiveTask("creative", {}, 100, "write a poem about rain").preferredRole,
     null
   );
+});
+
+test("unrecognized deterministic intent stays neutral for the AI classifier", () => {
+  const prompt = "Menurut kamu bagaimana hasil ini?";
+  const intent = classifyWithConfigDetailed(prompt, DEFAULT_INTENT_CONFIG);
+  const result = classifyAdaptiveTask(intent.type, {}, 40, prompt, undefined, intent);
+
+  assert.deepEqual(result.scores, { fastWorker: 0.48, strongReasoning: 0 });
+  assert.equal(result.preferredRole, null);
+  assert.equal(result.complexity, "neutral");
+  assert.equal(result.requiresAiClassifier, true);
+  assert.equal(result.decisionSource, "fallback");
+  assert.equal(result.decisionReason, "unrecognized-intent");
+});
+
+test("recognized Indonesian intent remains deterministic", () => {
+  const prompt = "Tolong ringkas teks ini.";
+  const intent = classifyWithConfigDetailed(prompt, DEFAULT_INTENT_CONFIG);
+  const result = classifyAdaptiveTask(intent.type, {}, 20, prompt, undefined, intent);
+
+  assert.equal(result.preferredRole, "fastWorker");
+  assert.equal(result.requiresAiClassifier, false);
+  assert.equal(result.decisionSource, "deterministic");
+  assert.equal(result.decisionReason, "recognized-simple-intent");
 });
 
 test("mode packs bias Ship Fast toward Fast Worker and Quality First toward Strong Reasoning", () => {

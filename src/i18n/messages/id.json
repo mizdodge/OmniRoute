@@ -3471,7 +3471,7 @@
     "rolePoolsHint": "Tetapkan satu atau beberapa model Step yang sudah ada ke setiap peran. Satu model boleh berada di kedua pool.",
     "adaptiveJudgeLabel": "Pengklasifikasi Intent AI",
     "adaptiveJudgeDisabled": "Hanya rules (nonaktif)",
-    "adaptiveJudgeHint": "Pilih satu model Step dari Combo ini untuk mengklasifikasikan request ambigu sebagai Fast atau Strong. Keputusan yang sudah jelas dan kegagalan classifier tetap memakai rules.",
+    "adaptiveJudgeHint": "Bahasa, jenis tugas, aksi, cakupan, domain, artefak, kompleksitas, batasan, risiko, dan konteks terbaru dianalisis secara lokal lebih dulu. Pilih satu model Step dari Combo ini hanya untuk permintaan yang benar-benar tidak dikenal, belum didukung, atau bertentangan. Permintaan kode, UI, dokumen, data, riset, kreatif, dan percakapan santai yang dikenali tidak menambah panggilan classifier; kegagalan kembali ke routing Auto biasa.",
     "fastWorkerPoolLabel": "Fast Worker Pool",
     "fastWorkerPoolHint": "Model untuk pekerjaan cepat, berkompleksitas rendah, atau bervolume tinggi.",
     "strongReasoningPoolLabel": "Strong Reasoning Pool",

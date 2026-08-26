@@ -439,7 +439,7 @@ export default function BuilderIntelligentStep({
             {getI18nOrFallback(
               t,
               "adaptiveJudgeHint",
-              "Choose one model Step from this Combo to classify ambiguous requests as Fast or Strong. Clear decisions and classifier failures use rules."
+              "Language, task family, action, scope, domain, artifacts, complexity, constraints, risk, and recent context are resolved locally first. Choose one model Step from this Combo only for genuinely unknown, unsupported, or conflicting requests. Recognized code, UI, document, data, research, creative, and casual requests add no classifier call; failures fall back to regular Auto routing."
             )}
           </p>
         </Card.Section>

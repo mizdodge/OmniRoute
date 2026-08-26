@@ -143,10 +143,19 @@ export async function runAdaptiveJudge(options: {
   target: ResolvedComboTarget;
   cacheScope?: string;
   routingContext?: FrontRoutingContext;
+  triggerReason?: string;
   handleSingleModel: HandleSingleModel;
   log: ComboLogger;
 }): Promise<AdaptiveJudgeVerdict | null> {
-  const { prompt, target, cacheScope, routingContext, handleSingleModel, log } = options;
+  const {
+    prompt,
+    target,
+    cacheScope,
+    routingContext,
+    triggerReason = "deterministic-uncertain",
+    handleSingleModel,
+    log,
+  } = options;
   if (!prompt.trim()) {
     log.info("COMBO", "[STEP] AI Intent Classifier : skipped | reason=empty-request");
     return null;
@@ -161,7 +170,7 @@ export async function runAdaptiveJudge(options: {
   if (cachedVerdict) {
     log.info(
       "COMBO",
-      `[STEP] AI Intent Classifier : reused | role=${cachedVerdict} | model=${target.modelStr}`
+      `[STEP] AI Intent Classifier : reused | role=${cachedVerdict} | reason=${triggerReason} | model=${target.modelStr}`
     );
     return cachedVerdict;
   }
@@ -216,7 +225,7 @@ export async function runAdaptiveJudge(options: {
     }
     log.info(
       "COMBO",
-      `[STEP] AI Intent Classifier : selected | role=${verdict} | model=${target.modelStr}`
+      `[STEP] AI Intent Classifier : selected | role=${verdict} | reason=${triggerReason} | model=${target.modelStr}`
     );
     if (cacheKey) writeJudgeDecision(cacheKey, verdict);
     return verdict;

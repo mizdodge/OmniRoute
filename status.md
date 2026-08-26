@@ -834,8 +834,8 @@ Status: Implemented and locally validated
   `[STEP] AI Intent Classifier`, `[STEP] Adaptive-Router`, and `[STEP] Task-Route`.
 - Adaptive Deterministic now compares independent `fastScore` and `strongScore` values, requiring
   both a minimum winning score (`0.350`) and minimum margin (`0.180`) before selecting a role.
-  Ordinary Medium requests therefore resolve to Fast locally, while low-confidence or conflicting
-  evidence remains neutral and alone reaches the optional AI classifier.
+  Recognized Fast/Strong evidence bypasses the optional AI classifier; a default Medium result with
+  no recognized keyword remains neutral and reaches it instead of being mistaken for Fast.
 - The checkpoint also emits `margin`, thresholds, and per-factor Fast/Strong contributions. These
   are diagnostic heuristic evidence, not Advanced Scoring Weights, concrete-model ranking, or
   probabilities.
@@ -847,3 +847,219 @@ Status: Implemented and locally validated
 
 - Focused adaptive routing regression suite: 68 passed, 0 failed.
 - `npm run typecheck:core`: passed after the dual-score restoration.
+
+### Post-Phase 5 — Unsupported-Language Confidence Gate
+
+Status: Implemented and locally validated
+
+- Added built-in Bahasa Indonesia keyword coverage across code, reasoning, math, creative, and
+  simple intent categories. The deterministic classifier now documents ten built-in languages.
+- Added a detailed, backward-compatible intent result. Existing callers still receive the legacy
+  intent label, while Adaptive routing receives deterministic confidence and recognition evidence.
+- At this phase, non-empty requests with no recognized keyword used the combined
+  `reason=unrecognized-intent-or-language` and remained neutral for the optional AI Intent
+  Classifier. Post-Phase 6 supersedes that combined reason with explicit language, intent, and
+  context signals.
+- Disabled classification and empty requests do not force an AI call. Missing, invalid, timed-out,
+  or failed AI classification remains fail-open to regular neutral Auto scoring.
+- Decision provenance is retained internally as `deterministic`, `ai_tiebreaker`, or `fallback` for
+  regression tests. User-facing logs use explicit `reason` fields instead of the ambiguous word
+  `source`.
+- AI verdicts remain label-only. AI self-confidence is ignored and is never compared with
+  deterministic scores because the scales are not calibrated.
+- Updated the Combo Builder hint in English and Indonesian to explain that the AI Intent Classifier
+  is also used for request languages without built-in keyword support.
+- Role-pool regression tests confirm that the selected role still controls the active pool, tier
+  boundaries remain intact, and a judge-only Step cannot become the final executor.
+
+#### Validation
+
+- Focused intent, AI classifier, role-pool, fallback, logging, and UI regression suite: 108 passed,
+  0 failed.
+- `npm run typecheck:core`: passed.
+
+### Post-Phase 6 — Multilingual Front Detection and Local Context Resolution
+
+Status: Implemented, packaged, and locally deployed
+
+- Added a deterministic Language Detector for English, Indonesian, Brazilian Portuguese, Spanish,
+  Chinese, Japanese, Russian, German, Korean, and Arabic. It reports primary/mixed language,
+  confidence, support status, and evidence without forwarding the prompt to another model.
+- Added a conservative Casual Intent Detector for everyday conversation in all ten languages.
+  Explicit code, math, reasoning, file, tool, and automation evidence takes precedence over casual
+  address words.
+- Added a bounded local Context Resolver for context-dependent follow-ups. It inspects at most two
+  recent user requests from the existing six-event summary, applies recency decay, and never treats
+  total history size as Strong evidence.
+- The optional AI Intent Classifier is now the final fallback for unsupported/unknown language,
+  genuine Fast/Strong conflicts, or context-dependent requests that local context cannot resolve.
+  No configured classifier and classifier failures remain seamless neutral Auto routing.
+- Added `[STEP] Language Detector` and `[STEP] Context Resolver` logs. All routing checkpoints use
+  `|` separators and explicit `reason` fields without logging the raw request.
+- Updated Combo Builder copy in English and Indonesian to explain deterministic-first behavior and
+  that a configured classifier is always used when deterministic language coverage is unavailable.
+- Role-pool scoring and fallback boundaries are unchanged: the selected role limits concrete model
+  selection to its active pool before alternate-role and General fallback tiers.
+
+#### Validation
+
+- New and updated focused intent/routing/UI regressions: 91 passed, 0 failed. This includes a
+  seeded set of 20 distinct Fast/Strong/neutral prompt wordings, with every result repeated to
+  guard against deterministic drift.
+- `npm run typecheck:core` and `npm run typecheck:noimplicit:core`: passed.
+- ESLint over every changed production, UI, configuration, and test file: passed. The repository-
+  wide lint gate remains blocked by 25 pre-existing `no-explicit-any` errors in
+  `tests/unit/cli-oauth-commands.test.ts` and `tests/unit/executor-gitlab.test.ts`.
+- `npm run test:vitest`: 40 files and 368 tests passed. The full Node unit command remained
+  inconclusive because unrelated baseline child-process suites did not exit; all focused routing
+  suites completed cleanly.
+- Documentation strict checks passed; the aggregate docs command remains blocked by 42 localized
+  changelogs that have not yet been synchronized with version 3.8.51.
+- `npm run build`, `npm run build:cli`, `npm pack`, package boot smoke, and canary package policy
+  validation passed. The retained `omniroute-3.8.51.tgz` contains build provenance for commit
+  `53c8577b0`.
+- Global install from the retained tarball succeeded as `omniroute@3.8.51`. OmniRoute was launched
+  in a visible CMD window, the installed global server owns port 20128, and
+  `GET /api/health/ping` returned HTTP 200 with `status=ok`.
+
+### Post-Phase 7 — Compositional Task Intent Detector
+
+Status: Implemented, validated, and release-built
+
+- Added a deterministic Task Intent Detector that separates task family, action mode, scope, and
+  complexity instead of treating a single keyword or generic Medium label as the whole decision.
+- Added families for routine coding, file/repository inspection, debugging, tests,
+  refactor/migration, architecture, documentation, structured data, Git, DevOps,
+  research/comparison, security review, general questions, and casual conversation.
+- Added a fifth structured routing checkpoint, `[STEP] Task Intent Detector`, with family, action,
+  scope, complexity, confidence, Fast/Strong evidence, reason, and sanitized evidence signals. It
+  never logs the raw request.
+- Recognized bounded inspection, exact lookup, documentation, and routine vibe-coding requests now
+  remain deterministic Fast. Debugging, architecture, security, migrations, difficult semantic
+  comparisons, and broad repository/system scope provide Strong evidence.
+- Genuinely unknown work, unsupported language, unresolved context, and true Fast/Strong conflicts
+  remain eligible for the optional AI Intent Classifier. If no classifier is configured or its call
+  fails, neutral Auto scoring remains seamless.
+- The existing worker-role contract is unchanged: the final role constrains scoring to the active
+  pool, Task-Route owns concrete model selection, and fallback remains Fast → Strong → General or
+  Strong → Fast → General.
+- Updated Combo Builder guidance, README, Auto-Combo reference, and the adaptive implementation
+  explanation to describe the local task stage and AI-only fallback accurately.
+
+#### Validation
+
+- Focused language/task/context/classifier/pool/log/UI regression suite: 100 passed, 0 failed.
+- The task regression includes 120 distinct prompt wordings across vibe coding, documentation,
+  data, casual questions, ambiguous/unsupported requests, and mixed/adversarial phrasing, plus
+  bounded file inspection in all ten supported languages.
+- `npm run typecheck:core`, `npm run typecheck:noimplicit:core`, and ESLint over every changed
+  TypeScript/TSX file: passed.
+- `npm run test:vitest`: 40 files and 368 tests passed.
+- The repository-wide Node unit run reached unrelated Adobe Firefly/CDP baseline failures and then
+  did not exit; the affected test is outside Adaptive routing. Focused routing suites stayed green.
+- Documentation count, environment sync, deprecated-version, link, and fabricated-claim checks
+  passed. The aggregate docs command remains blocked at its first step by the same 42 localized
+  changelogs missing the existing 3.8.51 section.
+- `npm run build` and `npm run build:cli` passed. The CLI builder reported its existing non-fatal
+  standalone MITM TypeScript warning, then completed all runtime bundles and produced `dist/`.
+- `npm pack`, packaged boot smoke, and canary artifact policy validation passed. The retained
+  `omniroute-3.8.51.tgz` is 352,869,355 bytes with SHA-256
+  `61CBD6CB000762CE35905076A8BC05DD30EDAE5668388CCA58E95AE3A3C3DD28` and build provenance
+  `53c8577b0`.
+- Global installation from that tarball succeeded as `omniroute@3.8.51`. The installed server was
+  launched in a visible CMD window, owns port 20128 from the global npm path, and
+  `GET /api/health/ping` returned HTTP 200 with `status=ok`.
+
+### Post-Phase 8 — Contextual Format Follow-ups and Whole-Project Scope
+
+Status: Implemented and focused validation passed; release ritual intentionally pending
+
+- Added a standalone deterministic Contextual Request Detector for format transformations,
+  continue commands, and clarification follow-ups. Supported output forms include Mermaid,
+  diagrams, tables, summaries, documentation, and code.
+- Contextual detection selects no worker role. The bounded Context Resolver inherits the relevant
+  prior Fast/Strong role; only missing or unusable context proceeds to the optional AI Intent
+  Classifier. Explicit new tasks and current-sentence pronouns do not inherit stale context.
+- The resolver still prefers recent user requests. When intervening tool events have evicted the
+  prior user turn from the six-event summary, it may use a recent meaningful assistant summary as a
+  constrained fallback rather than reading the full conversation.
+- Added repository-wide wording for `whole/entire/full project`, `whole/entire/full solution`,
+  `complete codebase`, and Indonesian equivalents. Whole-solution flow explanations now classify
+  as complex architecture work and deterministically select Strong Reasoning.
+- Added `[STEP] Contextual Request Detector` logging with dependency, operation, format,
+  confidence, reason, and sanitized signals. Raw user text is never included.
+- The role-pool and fallback contract is unchanged: inherited Strong routes inside Strong first,
+  inherited Fast routes inside Fast first, Task-Route selects the concrete model, and cross-role
+  fallback remains tier-safe.
+
+#### Validation
+
+- Final focused contextual/task/context/combo suite: 38 passed, 0 failed.
+- The existing 120 distinct vibe-coding prompt matrix now runs every wording twice and showed no
+  deterministic drift. It covers reading/navigation, review, routine updates, complex refactors,
+  debugging/testing, documentation/data work, casual questions, unsupported intent, and mixed or
+  adversarial phrasing.
+- Added 20 distinct contextual follow-up wordings, also run twice, plus explicit-new-task,
+  missing-context, Fast inheritance, Strong inheritance, and assistant-summary fallback coverage.
+- Broader affected routing pipeline tests: 81 passed, 0 failed. `npm run typecheck:core`,
+  `npm run typecheck:noimplicit:core`, and ESLint over the changed implementation/tests passed.
+- `npm run test:vitest`: 40 files and 368 tests passed.
+- The remaining documentation gates passed (counts with one pre-existing soft warning,
+  environment sync, deprecated-version advisory scan, links, and strict fabricated-claim checks).
+  The aggregate `check:docs-all` still stops at the pre-existing 42 localized changelogs that do
+  not contain the existing 3.8.51 section.
+- `npm run build`, `npm run build:cli`, `npm pack`, global install, and process restart were not run
+  for this phase because the release ritual is intentionally on hold pending user confirmation.
+
+### Post-Phase 9 — General-Purpose Request Profiles
+
+Status: Implemented, validated, and release-built
+
+- Added a deterministic Request Profile Detector beside the task-specific classifier. It composes
+  domain, named artifacts, risk, complexity, and explicit output constraints without model I/O.
+- Added domain coverage for software engineering, UI/UX, data, documents, research, education,
+  writing/language, creative work, business, finance, legal, health, cybersecurity, mathematics,
+  science/engineering, personal advice, multimedia, and general knowledge.
+- Added independent artifact signals for source code, user interfaces, data, documents, media,
+  configuration, and deployment. A request may expose more than one artifact.
+- Calibrated precedence so a simple domain profile cannot cancel specific heavy task evidence.
+  Complex profile evidence may upgrade routine-looking work; simple calculations and definitions
+  are not promoted solely because the legacy intent label is `math` or `reasoning`.
+- Fixed the task-family ambiguity where ordinary prose such as `rewrite this email` was treated as
+  a code refactor. `rewrite` now requires a code, repository, or file artifact before it enters the
+  refactor/migration family.
+- Added `[STEP] Request Profile Detector` logging with domain, artifacts, risk, complexity,
+  constraint count, confidence, reason, role evidence, and sanitized signals. Raw prompt text is
+  never logged.
+- Updated Combo Builder guidance in English and Indonesian plus README and routing references to
+  describe general-purpose local coverage and the last-resort AI contract.
+- Added a 100-prompt general-purpose regression corpus. Every distinct wording is evaluated twice
+  to detect routing drift across UI/vibe coding, software, documents, data, writing, creative,
+  education, research, mathematics, science, business, finance, legal, health, multimedia,
+  automation, and genuinely ambiguous work.
+
+#### Validation
+
+- Final affected Adaptive suite: 111 passed, 0 failed. The 100 distinct general-purpose prompts
+  and existing 120 distinct vibe-coding prompts are each evaluated twice to guard against
+  deterministic drift.
+- `npm run typecheck:core`, `npm run typecheck:noimplicit:core`, and scoped ESLint over all changed
+  production, UI, and test files: passed.
+- `npm run test:vitest`: 40 files and 368 tests passed.
+- The full Node unit command was stopped after it reached the unrelated Adobe Firefly/CDP live
+  token-refresh baseline and did not exit. All focused Adaptive routing suites completed cleanly.
+- Auto-Combo matrix: 25 of 27 passed. The two failures are unrelated baseline behavior: one
+  context-relay handoff record was absent, and one randomized weighted distribution landed outside
+  its statistical tolerance.
+- Documentation count, environment sync, deprecated-version advisory, link, and strict
+  fabricated-claim checks passed. The aggregate docs command remains blocked at its first step by
+  the existing 42 localized changelogs that do not contain the existing 3.8.51 section.
+- `npm run build` and `npm run build:cli` passed. The CLI builder emitted the existing non-fatal
+  standalone MITM TypeScript warning, then completed the distribution bundle successfully.
+- The official package artifact policy passed as an explicitly authorized current-branch canary.
+  The retained `omniroute-3.8.51.tgz` is 352,920,101 bytes with SHA-256
+  `3FA552E3C6556393F3F8F96DE2F1D2E6D4E61982C952006A24AF995D5DC8D45E` and build provenance
+  `53c8577b0`.
+- Global installation from the retained tarball succeeded as `omniroute@3.8.51`. The installed
+  server was launched in a visible CMD window, owns port 20128 from the global npm path, and
+  `GET /api/health/ping` returned HTTP 200 with `status=ok`.

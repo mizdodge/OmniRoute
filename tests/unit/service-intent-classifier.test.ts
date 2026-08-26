@@ -17,7 +17,10 @@ describe("intentClassifier", () => {
     });
 
     it("classifies reasoning intent", () => {
-      assert.equal(mod.classifyPromptIntent("Explain the reasoning behind quantum mechanics"), "reasoning");
+      assert.equal(
+        mod.classifyPromptIntent("Explain the reasoning behind quantum mechanics"),
+        "reasoning"
+      );
     });
 
     it("classifies creative intent", () => {
@@ -33,8 +36,11 @@ describe("intentClassifier", () => {
       assert.equal(mod.classifyPromptIntent("Describe the fall of the Roman Empire"), "medium");
     });
 
-    it("considers system prompt in classification", () => {
-      assert.equal(mod.classifyPromptIntent("Hello", "You are a Python coding assistant"), "code");
+    it("ignores system prompt capability metadata when classifying user intent", () => {
+      assert.equal(
+        mod.classifyPromptIntent("Hello", "You are a Python coding assistant"),
+        "simple"
+      );
     });
 
     it("code keywords take priority over math", () => {

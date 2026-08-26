@@ -20,10 +20,11 @@ import {
 } from "../autoCombo/taskClassification.ts";
 import { activateAdaptiveRoleWeight } from "../autoCombo/scoring.ts";
 import { runAdaptiveJudge } from "../autoCombo/adaptiveJudge.ts";
+import { resolveConversationContext } from "../autoCombo/conversationContextResolver.ts";
 import { buildFrontRoutingContext } from "../autoCombo/routingContext.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
-import { classifyWithConfig } from "../intentClassifier.ts";
+import { classifyWithConfigDetailed } from "../intentClassifier.ts";
 import type { RoutingHint } from "../manifestAdapter";
 import { parseModel } from "../model.ts";
 import { supportsToolCalling } from "../modelCapabilities.ts";
@@ -229,7 +230,54 @@ export async function resolveAutoStrategyOrder(
   const prompt = extractPromptForIntent(body);
   const systemPrompt = typeof combo?.system_message === "string" ? combo.system_message : undefined;
   const intentConfig = getIntentConfig(settings, combo);
-  const intent = classifyWithConfig(prompt, intentConfig, systemPrompt);
+  const intentClassification = classifyWithConfigDetailed(prompt, intentConfig, systemPrompt);
+  const intent = intentClassification.type;
+  const language = intentClassification.language;
+  log.info(
+    "COMBO",
+    `[STEP] Language Detector : primary=${language.primary} | ` +
+      `languages=${language.languages.join(",") || "none"} | mixed=${language.mixed} | ` +
+      `supported=${language.supported} | confidence=${language.confidence.toFixed(3)} | ` +
+      `reason=${
+        language.supported
+          ? "supported-language"
+          : language.signals.some((signal) => signal.startsWith("unsupported-script:"))
+            ? "unsupported-language"
+            : "language-unknown"
+      } | signals=${language.signals.join(",") || "none"}`
+  );
+  const taskIntent = intentClassification.task;
+  const contextualRequest = intentClassification.contextual;
+  const requestProfile = intentClassification.profile;
+  log.info(
+    "COMBO",
+    `[STEP] Task Intent Detector : family=${taskIntent.family} | ` +
+      `action=${taskIntent.actionMode} | scope=${taskIntent.scope} | ` +
+      `complexity=${taskIntent.complexity} | confidence=${taskIntent.confidence.toFixed(3)} | ` +
+      `reason=${taskIntent.reason} | ` +
+      `fastEvidence=${taskIntent.roleEvidence.fastWorker.toFixed(3)} | ` +
+      `strongEvidence=${taskIntent.roleEvidence.strongReasoning.toFixed(3)} | ` +
+      `signals=${taskIntent.signals.join(",") || "none"}`
+  );
+  log.info(
+    "COMBO",
+    `[STEP] Request Profile Detector : domain=${requestProfile.domain} | ` +
+      `artifacts=${requestProfile.artifacts.join(",") || "none"} | ` +
+      `risk=${requestProfile.risk} | complexity=${requestProfile.complexity} | ` +
+      `constraints=${requestProfile.constraintCount} | ` +
+      `confidence=${requestProfile.confidence.toFixed(3)} | reason=${requestProfile.reason} | ` +
+      `fastEvidence=${requestProfile.roleEvidence.fastWorker.toFixed(3)} | ` +
+      `strongEvidence=${requestProfile.roleEvidence.strongReasoning.toFixed(3)} | ` +
+      `signals=${requestProfile.signals.join(",") || "none"}`
+  );
+  log.info(
+    "COMBO",
+    `[STEP] Contextual Request Detector : dependent=${contextualRequest.contextDependent} | ` +
+      `operation=${contextualRequest.operation} | format=${contextualRequest.format} | ` +
+      `confidence=${contextualRequest.confidence.toFixed(3)} | ` +
+      `reason=${contextualRequest.reason} | ` +
+      `signals=${contextualRequest.signals.join(",") || "none"}`
+  );
   recordComboIntent(combo.name, intent);
   const taskType = mapIntentToTaskType(intent);
   const estimatedUserRequestTokens = estimateTokens(prompt);
@@ -239,12 +287,16 @@ export async function resolveAutoStrategyOrder(
     body,
     estimatedUserRequestTokens,
     prompt,
-    routingContext
+    routingContext,
+    intentClassification
   );
   log.info(
     "COMBO",
     `[STEP] Adaptive Deterministic : role=${adaptiveTask.preferredRole || "neutral"} | ` +
       `complexity=${adaptiveTask.complexity} | ` +
+      `reason=${adaptiveTask.decisionReason} | ` +
+      `intentScore=${intentClassification.confidence.toFixed(3)} | ` +
+      `casualScore=${intentClassification.casual.score.toFixed(3)} | ` +
       `fastScore=${adaptiveTask.scores.fastWorker.toFixed(3)} | ` +
       `strongScore=${adaptiveTask.scores.strongReasoning.toFixed(3)} | ` +
       `margin=${adaptiveTask.margin.toFixed(3)} | ` +
@@ -259,6 +311,39 @@ export async function resolveAutoStrategyOrder(
           .join(",") || "none"
       } | signals=${adaptiveTask.signals.join(",") || "none"}`
   );
+
+  const contextResolution = resolveConversationContext(
+    intentClassification,
+    adaptiveTask,
+    routingContext
+  );
+  log.info(
+    "COMBO",
+    `[STEP] Context Resolver : status=${contextResolution.status} | ` +
+      `role=${contextResolution.role || "neutral"} | reason=${contextResolution.reason} | ` +
+      `score=${contextResolution.score.toFixed(3)} | ` +
+      `previousRole=${contextResolution.previousRole || "none"} | ` +
+      `contextAge=${contextResolution.contextAge ?? "none"} | ` +
+      `signals=${contextResolution.signals.join(",") || "none"}`
+  );
+  if (contextResolution.status === "resolved" && contextResolution.role) {
+    const contextFactor =
+      contextResolution.role === "strongReasoning"
+        ? { fastWorker: 0, strongReasoning: contextResolution.score }
+        : { fastWorker: contextResolution.score, strongReasoning: 0 };
+    adaptiveTask = {
+      ...adaptiveTask,
+      complexity: contextResolution.role === "strongReasoning" ? "complex" : "simple",
+      preferredRole: contextResolution.role,
+      scores: contextFactor,
+      margin: contextResolution.score,
+      factorScores: { [`context:${contextResolution.reason}`]: contextFactor },
+      decisionSource: "deterministic",
+      decisionReason: contextResolution.reason,
+      requiresAiClassifier: false,
+      signals: [`context:${contextResolution.reason}`, ...contextResolution.signals],
+    };
+  }
   log.debug?.("COMBO", "Front routing context analyzed", {
     currentRequestTokens: estimatedUserRequestTokens,
     totalInputTokens: routingContext.capability.estimatedTotalInputTokens,
@@ -366,13 +451,15 @@ export async function resolveAutoStrategyOrder(
   const hasFastWorkerPool = fastWorkerStepIds.size > 0;
   const hasStrongReasoningPool = strongReasoningStepIds.size > 0;
 
-  // Preserve the 3.8.50 classifier flow: deterministic Fast/Strong decisions win,
-  // while a neutral decision goes directly to the configured AI classifier before
-  // the main Auto scoring pass. Classifier failures still fail open to neutral Auto.
+  // Preserve the 3.8.50 deterministic-first classifier boundary. A bounded local
+  // context decision may now resolve a contextual follow-up before a still-neutral
+  // request reaches the AI classifier. Failures remain fail-open to neutral Auto.
   if (adaptiveTask.preferredRole !== null) {
+    const reason =
+      contextResolution.status === "resolved" ? "context-resolved" : "deterministic-role";
     log.info(
       "COMBO",
-      `[STEP] AI Intent Classifier : skipped | reason=deterministic-role | role=${adaptiveTask.preferredRole}`
+      `[STEP] AI Intent Classifier : skipped | reason=${reason} | role=${adaptiveTask.preferredRole}`
     );
   } else if (judgeTarget && body._omnirouteInternalRequest !== "adaptive-judge") {
     const judgeVerdict = await runAdaptiveJudge({
@@ -380,6 +467,7 @@ export async function resolveAutoStrategyOrder(
       target: judgeTarget,
       cacheScope: combo.id || combo.name,
       routingContext,
+      triggerReason: adaptiveTask.decisionReason,
       handleSingleModel: deps.handleSingleModel,
       log,
     });
@@ -398,18 +486,34 @@ export async function resolveAutoStrategyOrder(
               ? { fastWorker: 0, strongReasoning: 1 }
               : { fastWorker: 1, strongReasoning: 0 },
         },
+        decisionSource: "ai_tiebreaker",
+        decisionReason: "ai-classifier",
+        requiresAiClassifier: false,
         signals: [`ai-judge:${judgeTarget.stepId}`],
+      };
+    } else {
+      adaptiveTask = {
+        ...adaptiveTask,
+        decisionSource: "fallback",
+        decisionReason: "ai-classifier-failed",
+        requiresAiClassifier: false,
       };
     }
   } else {
-    log.info(
-      "COMBO",
-      `[STEP] AI Intent Classifier : skipped | reason=${
-        body._omnirouteInternalRequest === "adaptive-judge"
-          ? "internal-classifier-request"
-          : "not-configured"
-      }`
-    );
+    const skipReason =
+      body._omnirouteInternalRequest === "adaptive-judge"
+        ? "internal-classifier-request"
+        : "not-configured";
+    log.info("COMBO", `[STEP] AI Intent Classifier : skipped | reason=${skipReason}`);
+    adaptiveTask = {
+      ...adaptiveTask,
+      decisionSource: "fallback",
+      decisionReason:
+        skipReason === "not-configured"
+          ? "ai-classifier-not-configured"
+          : "internal-classifier-request",
+      requiresAiClassifier: false,
+    };
   }
 
   for (const candidate of routableCandidates) {
@@ -621,6 +725,7 @@ export async function resolveAutoStrategyOrder(
       "COMBO",
       `[STEP] Adaptive-Router : role=${adaptiveTask.preferredRole || "neutral"} | ` +
         `activePool=${activePool || "general"} | poolSize=${primaryRulesCandidates.length} | ` +
+        `reason=${adaptiveTask.decisionReason} | ` +
         `intent=${intent} | task=${taskType} | ` +
         `signals=${adaptiveTask.signals.join(",") || "none"} | strategy=${routingStrategy}`
     );

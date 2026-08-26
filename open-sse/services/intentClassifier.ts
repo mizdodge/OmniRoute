@@ -1,8 +1,17 @@
+import { detectCasualIntent, type CasualIntentResult } from "./casualIntentDetector.ts";
+import {
+  detectContextualRequest,
+  type ContextualRequestResult,
+} from "./contextualRequestDetector.ts";
+import { detectPromptLanguage, type LanguageDetectionResult } from "./intentLanguageDetector.ts";
+import { detectRequestProfile, type RequestProfileResult } from "./requestProfileDetector.ts";
+import { detectTaskIntent, type TaskIntentResult } from "./taskIntentDetector.ts";
+
 /**
  * Multilingual Intent Detection for AutoCombo
  *
  * Classifies prompts as: code | math | reasoning | creative | simple | medium
- * using keywords in 9 languages (EN, PT-BR, ES, ZH, JA, RU, DE, KO, AR).
+ * using keywords in 10 languages (EN, PT-BR, ES, ID, ZH, JA, RU, DE, KO, AR).
  *
  * Inspired by ClawRouter (BlockRunAI) multilingual routing system.
  * Execution: purely synchronous, <1ms, no I/O.
@@ -14,6 +23,77 @@ export interface ClassificationResult {
   type: IntentType;
   confidence: number;
   signals: string[];
+  recognized: boolean;
+  shouldUseAiClassifier: boolean;
+  reason: string;
+  language: LanguageDetectionResult;
+  casual: CasualIntentResult;
+  contextual: ContextualRequestResult;
+  profile: RequestProfileResult;
+  task: TaskIntentResult;
+}
+
+export const MIN_DETERMINISTIC_INTENT_CONFIDENCE = 0.65;
+const RECOGNIZED_INTENT_CONFIDENCE = 0.9;
+
+function buildClassificationResult(options: {
+  type: IntentType;
+  confidence: number;
+  signals: string[];
+  recognized: boolean;
+  allowAiClassifier: boolean;
+  reason: string;
+  language: LanguageDetectionResult;
+  casual: CasualIntentResult;
+  contextual: ContextualRequestResult;
+  profile: RequestProfileResult;
+  task: TaskIntentResult;
+}): ClassificationResult {
+  return {
+    type: options.type,
+    confidence: options.confidence,
+    signals: options.signals,
+    recognized: options.recognized,
+    shouldUseAiClassifier:
+      options.allowAiClassifier && options.confidence < MIN_DETERMINISTIC_INTENT_CONFIDENCE,
+    reason: options.reason,
+    language: options.language,
+    casual: options.casual,
+    contextual: options.contextual,
+    profile: options.profile,
+    task: options.task,
+  };
+}
+
+function taskFamilyIntent(task: TaskIntentResult): IntentType {
+  if (
+    [
+      "codeInspection",
+      "codeChange",
+      "debugging",
+      "testing",
+      "refactorMigration",
+      "gitOps",
+      "devOps",
+    ].includes(task.family)
+  ) {
+    return "code";
+  }
+  if (["architecture", "researchComparison", "securityReview"].includes(task.family)) {
+    return "reasoning";
+  }
+  if (task.recognized) return "simple";
+  return "medium";
+}
+
+function requestProfileIntent(profile: RequestProfileResult): IntentType {
+  if (profile.complexity === "complex") return "reasoning";
+  if (["softwareEngineering", "uiUx", "dataAnalytics", "cybersecurity"].includes(profile.domain)) {
+    return "code";
+  }
+  if (profile.domain === "mathematicsLogic") return "math";
+  if (["writingLanguage", "creative"].includes(profile.domain)) return "creative";
+  return "simple";
 }
 
 const USER_REQUEST_TAG_NAMES = [
@@ -64,6 +144,13 @@ function containsIntentKeyword(search: IntentSearchSpace, keyword: string): bool
   const usesAsciiWordBoundaries = /^[a-z0-9_]+(?:\s+[a-z0-9_]+)*$/.test(normalizedKeyword);
   if (!usesAsciiWordBoundaries) return search.raw.includes(normalizedKeyword);
   return search.asciiWords.includes(` ${normalizedKeyword.replace(/\s+/g, " ")} `);
+}
+
+function findIntentKeyword(search: IntentSearchSpace, keywords: readonly string[]): string | null {
+  for (const keyword of keywords) {
+    if (containsIntentKeyword(search, keyword)) return keyword.trim().toLowerCase();
+  }
+  return null;
 }
 
 function findLastTaggedValue(text: string, tagNames: readonly string[]): string | null {
@@ -130,6 +217,8 @@ export const CODE_KEYWORDS: readonly string[] = [
   "algorithm",
   "compile",
   "debug",
+  "format",
+  "formatter",
   "refactor",
   "typescript",
   "python",
@@ -153,6 +242,31 @@ export const CODE_KEYWORDS: readonly string[] = [
   "module",
   "package",
   "dependency",
+  // Bahasa Indonesia
+  "fungsi",
+  "kelas",
+  "impor",
+  "kueri",
+  "asinkron",
+  "konstanta",
+  "variabel",
+  "kembalikan",
+  "algoritma",
+  "kompilasi",
+  "debug",
+  "refaktor",
+  "kode",
+  "implementasikan",
+  "komponen",
+  "repositori",
+  "konfigurasi",
+  "instal",
+  "basis data",
+  "skrip",
+  "antarmuka",
+  "modul",
+  "paket",
+  "dependensi",
   // Português (PT-BR)
   "função",
   "classe",
@@ -281,6 +395,21 @@ export const REASONING_KEYWORDS: readonly string[] = [
   "infer",
   "hypothesis",
   "convergence",
+  // Bahasa Indonesia
+  "buktikan",
+  "teorema",
+  "turunkan",
+  "langkah demi langkah",
+  "secara formal",
+  "matematis",
+  "pembuktian",
+  "secara logis",
+  "analisis",
+  "selidiki",
+  "penalaran",
+  "deduksi",
+  "simpulkan",
+  "hipotesis",
   // Português (PT-BR)
   "provar",
   "teorema",
@@ -368,6 +497,22 @@ export const MATH_KEYWORDS: readonly string[] = [
   "vector",
   "statistics",
   "probability",
+  // Bahasa Indonesia
+  "hitung",
+  "selesaikan",
+  "persamaan",
+  "rumus",
+  "integral",
+  "turunan",
+  "teorema",
+  "aljabar",
+  "geometri",
+  "aritmetika",
+  "polinomial",
+  "matriks",
+  "vektor",
+  "statistik",
+  "probabilitas",
   // Português (PT-BR)
   "calcular",
   "resolver",
@@ -504,6 +649,20 @@ export const CREATIVE_KEYWORDS: readonly string[] = [
   "screenplay",
   "lyrics",
   "essay",
+  // Bahasa Indonesia
+  "tulis",
+  "cerita",
+  "puisi",
+  "kreatif",
+  "curah pendapat",
+  "blog",
+  "artikel",
+  "pemasaran",
+  "narasi",
+  "fiksi",
+  "skenario",
+  "lirik",
+  "esai",
   // Português (PT-BR)
   "escrever",
   "história",
@@ -632,6 +791,20 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
   "how are you",
   "what can you do",
   "who are you",
+  // Bahasa Indonesia
+  "apa itu",
+  "definisikan",
+  "terjemahkan",
+  "halo",
+  "ya atau tidak",
+  "ringkas",
+  "daftar",
+  "beri tahu",
+  "siapa",
+  "apa yang bisa kamu lakukan",
+  "siapa kamu",
+  "jelaskan singkat",
+  "secara sederhana",
   // Português (PT-BR)
   "o que é",
   "definir",
@@ -692,32 +865,7 @@ export const SIMPLE_KEYWORDS: readonly string[] = [
  * Priority: code > math > reasoning > creative > simple > medium (default)
  */
 export function classifyPromptIntent(prompt: string, systemPrompt?: string): IntentType {
-  // Intent belongs to the human request. IDE/system instructions describe the
-  // client and available capabilities, not what the user is asking right now.
-  void systemPrompt;
-  const userPrompt = extractUserRequestFromClientEnvelope(prompt);
-  const search = buildIntentSearchSpace(userPrompt);
-  const wordCount = userPrompt.trim().split(/\s+/).length;
-
-  for (const kw of CODE_KEYWORDS) {
-    if (containsIntentKeyword(search, kw)) return "code";
-  }
-  for (const kw of MATH_KEYWORDS) {
-    if (containsIntentKeyword(search, kw)) return "math";
-  }
-  for (const kw of REASONING_KEYWORDS) {
-    if (containsIntentKeyword(search, kw)) return "reasoning";
-  }
-  for (const kw of CREATIVE_KEYWORDS) {
-    if (containsIntentKeyword(search, kw)) return "creative";
-  }
-  if (wordCount < 60) {
-    if (["hi", "hey", "hello"].includes(search.raw.trim())) return "simple";
-    for (const kw of SIMPLE_KEYWORDS) {
-      if (containsIntentKeyword(search, kw)) return "simple";
-    }
-  }
-  return "medium";
+  return classifyWithConfigDetailed(prompt, DEFAULT_INTENT_CONFIG, systemPrompt).type;
 }
 
 export interface IntentClassifierConfig {
@@ -740,9 +888,56 @@ export function classifyWithConfig(
   config: IntentClassifierConfig,
   systemPrompt?: string
 ): IntentType {
-  if (!config.enabled) return "medium";
-  void systemPrompt;
+  return classifyWithConfigDetailed(prompt, config, systemPrompt).type;
+}
+
+/**
+ * Return deterministic evidence separately from the legacy intent label.
+ * A default `medium` label is intentionally low-confidence: it means no
+ * built-in keyword matched and may represent an unsupported request language.
+ */
+export function classifyWithConfigDetailed(
+  prompt: string,
+  config: IntentClassifierConfig,
+  systemPrompt?: string
+): ClassificationResult {
   const userPrompt = extractUserRequestFromClientEnvelope(prompt);
+  const language = detectPromptLanguage(userPrompt);
+  const casual = detectCasualIntent(userPrompt);
+  const contextual = detectContextualRequest(userPrompt);
+  const profile = detectRequestProfile(userPrompt);
+  const task = detectTaskIntent(userPrompt);
+  if (!config.enabled) {
+    return buildClassificationResult({
+      type: "medium",
+      confidence: 0,
+      signals: ["classifier-disabled"],
+      recognized: false,
+      allowAiClassifier: false,
+      reason: "classifier-disabled",
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
+  }
+  void systemPrompt;
+  if (!userPrompt.trim()) {
+    return buildClassificationResult({
+      type: "medium",
+      confidence: 0,
+      signals: ["empty-request"],
+      recognized: false,
+      allowAiClassifier: false,
+      reason: "empty-request",
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
+  }
   const search = buildIntentSearchSpace(userPrompt);
   const wordCount = userPrompt.trim().split(/\s+/).length;
   const maxSimpleWords = config.simpleMaxWords ?? 60;
@@ -751,23 +946,134 @@ export function classifyWithConfig(
   const reasoningKws = [...REASONING_KEYWORDS, ...(config.extraReasoningKeywords ?? [])];
   const creativeKws = [...CREATIVE_KEYWORDS, ...(config.extraCreativeKeywords ?? [])];
   const simpleKws = [...SIMPLE_KEYWORDS, ...(config.extraSimpleKeywords ?? [])];
-  for (const kw of codeKws) {
-    if (containsIntentKeyword(search, kw)) return "code";
+
+  const recognizedResult = (type: IntentType, keyword: string): ClassificationResult =>
+    buildClassificationResult({
+      type,
+      confidence: RECOGNIZED_INTENT_CONFIDENCE,
+      signals: [`keyword:${type}:${keyword}`],
+      recognized: true,
+      allowAiClassifier: true,
+      reason: `recognized-${type}-intent`,
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
+
+  if (contextual.contextDependent) {
+    return buildClassificationResult({
+      type: "medium",
+      confidence: 0,
+      signals: contextual.signals,
+      recognized: false,
+      allowAiClassifier: true,
+      reason: "context-dependent-request",
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
   }
-  for (const kw of mathKws) {
-    if (containsIntentKeyword(search, kw)) return "math";
+
+  const codeKeyword = findIntentKeyword(search, codeKws);
+  if (codeKeyword) return recognizedResult("code", codeKeyword);
+  const mathKeyword = findIntentKeyword(search, mathKws);
+  if (mathKeyword) return recognizedResult("math", mathKeyword);
+  const reasoningKeyword = findIntentKeyword(search, reasoningKws);
+  if (reasoningKeyword) return recognizedResult("reasoning", reasoningKeyword);
+  const creativeKeyword = findIntentKeyword(search, creativeKws);
+  if (creativeKeyword) return recognizedResult("creative", creativeKeyword);
+  if (language.signals.some((signal) => signal.startsWith("unsupported-script:"))) {
+    return buildClassificationResult({
+      type: "medium",
+      confidence: 0,
+      signals: ["unsupported-language", ...language.signals],
+      recognized: false,
+      allowAiClassifier: true,
+      reason: "unsupported-language",
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
   }
-  for (const kw of reasoningKws) {
-    if (containsIntentKeyword(search, kw)) return "reasoning";
-  }
-  for (const kw of creativeKws) {
-    if (containsIntentKeyword(search, kw)) return "creative";
+  if (task.recognized && !(task.family === "generalQuestion" && wordCount >= maxSimpleWords)) {
+    return buildClassificationResult({
+      type: taskFamilyIntent(task),
+      confidence: task.confidence,
+      signals: task.signals,
+      recognized: true,
+      allowAiClassifier: false,
+      reason: task.reason,
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
   }
   if (wordCount < maxSimpleWords) {
-    if (["hi", "hey", "hello"].includes(search.raw.trim())) return "simple";
-    for (const kw of simpleKws) {
-      if (containsIntentKeyword(search, kw)) return "simple";
+    if (["hi", "hey", "hello"].includes(search.raw.trim())) {
+      return recognizedResult("simple", search.raw.trim());
     }
+    const simpleKeyword = findIntentKeyword(search, simpleKws);
+    if (simpleKeyword) return recognizedResult("simple", simpleKeyword);
   }
-  return "medium";
+  if (profile.recognized && (profile.complexity === "complex" || wordCount < maxSimpleWords)) {
+    return buildClassificationResult({
+      type: requestProfileIntent(profile),
+      confidence: profile.confidence,
+      signals: profile.signals,
+      recognized: true,
+      allowAiClassifier: false,
+      reason: profile.reason,
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
+  }
+  if (casual.isCasual) {
+    return buildClassificationResult({
+      type: "simple",
+      confidence: casual.confidence,
+      signals: casual.signals,
+      recognized: true,
+      allowAiClassifier: false,
+      reason: "casual-conversation",
+      language,
+      casual,
+      contextual,
+      profile,
+      task,
+    });
+  }
+  return buildClassificationResult({
+    type: "medium",
+    confidence: 0,
+    signals: [
+      casual.contextDependent
+        ? "context-dependent-conversation"
+        : language.supported
+          ? "unrecognized-intent"
+          : "unsupported-language",
+    ],
+    recognized: false,
+    allowAiClassifier: true,
+    reason: casual.contextDependent
+      ? "context-dependent-conversation"
+      : language.supported
+        ? "unrecognized-intent"
+        : "unsupported-language",
+    language,
+    casual,
+    contextual,
+    profile,
+    task,
+  });
 }

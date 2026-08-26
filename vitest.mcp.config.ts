@@ -24,7 +24,16 @@ export default defineConfig({
       "src/shared/hooks/__tests__/**/*.test.tsx",
       "src/app/(dashboard)/**/__tests__/**/*.test.tsx",
     ],
-    exclude: ["**/node_modules/**", "**/.git/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/.git/**",
+      // These routing regressions intentionally use node:test and are collected
+      // by test:unit. Vitest executes their assertions through node:test but then
+      // reports each file as an empty Vitest suite, producing a false failure.
+      "tests/unit/autoCombo/adaptiveJudge.test.ts",
+      "tests/unit/autoCombo/routingContext.test.ts",
+      "tests/unit/autoCombo/taskClassification.test.ts",
+    ],
     coverage: {
       reportsDirectory: "coverage",
     },

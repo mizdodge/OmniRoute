@@ -1,4 +1,4 @@
-import type { IntentType } from "../intentClassifier.ts";
+import type { ClassificationResult, IntentType } from "../intentClassifier.ts";
 import type { FrontRoutingContext } from "./routingContext.ts";
 
 export type AdaptiveRolePreference = "fastWorker" | "strongReasoning" | null;
@@ -17,6 +17,11 @@ export type AdaptiveTaskClassification = {
   margin: number;
   /** Per-signal contributions to each adaptive role score. */
   factorScores: Record<string, AdaptiveRoleScores>;
+  /** Internal provenance for tests and diagnostics; logs use the less ambiguous `reason`. */
+  decisionSource: "deterministic" | "ai_tiebreaker" | "fallback";
+  decisionReason: string;
+  /** True when deterministic evidence is too weak to safely choose a role. */
+  requiresAiClassifier: boolean;
   signals: string[];
 };
 
@@ -25,7 +30,7 @@ const COMPLEX_INTENTS = new Set<IntentType>(["math", "reasoning"]);
 const LIGHT_CODE_RE =
   /\b(format|formatter|lint|rename|typo|comment|read|search|find|status|one[- ]?line|small change|quick fix|run (?:the )?tests?|check (?:the )?tests?)\b/i;
 const HEAVY_CODE_RE =
-  /\b(debug|root cause|architecture|architectural|refactor|migrate|migration|implement(?:ation)?|design|investigate|trace|multi[- ]?file|multiple files|codebase|repository|repo[- ]?wide|security|vulnerability|race condition|deadlock|performance regression)\b/i;
+  /\b(debug|root cause|architecture|architectural|refactor|migrate|migration|implement(?:ation)?|design|investigate|trace|multi[- ]?file|multiple files|whole codebase|repo(?:sitory)?[- ]?wide|security|vulnerability|race condition|deadlock|performance regression)\b/i;
 
 export const ADAPTIVE_ROLE_MIN_SCORE = 0.35;
 export const ADAPTIVE_ROLE_MIN_MARGIN = 0.18;
@@ -64,7 +69,9 @@ function combineRoleEvidence(
 }
 
 function classification(
-  factorScores: Record<string, AdaptiveRoleScores>
+  factorScores: Record<string, AdaptiveRoleScores>,
+  intent: IntentType,
+  intentClassification?: ClassificationResult
 ): AdaptiveTaskClassification {
   const scores = {
     fastWorker: combineRoleEvidence(factorScores, "fastWorker"),
@@ -72,12 +79,21 @@ function classification(
   };
   const margin = roundScore(Math.abs(scores.fastWorker - scores.strongReasoning));
   const winnerScore = Math.max(scores.fastWorker, scores.strongReasoning);
-  const preferredRole: AdaptiveRolePreference =
+  const deterministicRole: AdaptiveRolePreference =
     winnerScore < ADAPTIVE_ROLE_MIN_SCORE || margin < ADAPTIVE_ROLE_MIN_MARGIN
       ? null
       : scores.fastWorker > scores.strongReasoning
         ? "fastWorker"
         : "strongReasoning";
+  const requiresAiClassifier = intentClassification?.shouldUseAiClassifier === true;
+  const preferredRole = requiresAiClassifier ? null : deterministicRole;
+  const decisionReason = requiresAiClassifier
+    ? (intentClassification?.reason ?? "low-confidence-intent")
+    : preferredRole
+      ? intentClassification?.task.recognized
+        ? intentClassification.task.reason
+        : `recognized-${intent}-intent`
+      : "conflicting-or-low-evidence";
   return {
     complexity:
       preferredRole === "fastWorker"
@@ -89,6 +105,9 @@ function classification(
     scores,
     margin,
     factorScores,
+    decisionSource: preferredRole ? "deterministic" : "fallback",
+    decisionReason,
+    requiresAiClassifier,
     signals: Object.keys(factorScores),
   };
 }
@@ -127,7 +146,8 @@ export function classifyAdaptiveTask(
   body: Record<string, unknown> | null | undefined,
   estimatedInputTokens = 0,
   prompt = "",
-  routingContext?: FrontRoutingContext
+  routingContext?: FrontRoutingContext,
+  intentClassification?: ClassificationResult
 ): AdaptiveTaskClassification {
   const factorScores: Record<string, AdaptiveRoleScores> = {};
   const automationContinuation =
@@ -143,17 +163,28 @@ export function classifyAdaptiveTask(
   const effort = routingContext?.execution.reasoningEffort ?? bodyEffort;
   const highEffort = /^(high|xhigh|max|maximum|hard|deep)$/.test(effort);
 
-  if (intent === "simple") {
+  const profileMarksComplex = intentClassification?.profile.complexity === "complex";
+  if (intent === "simple" && !profileMarksComplex) {
     factorScores["intent:simple"] = DETERMINISTIC_FACTOR_WEIGHT.simpleIntent;
-  } else if (intent === "medium") {
+  } else if (intent === "medium" && !profileMarksComplex) {
     factorScores["intent:medium"] = DETERMINISTIC_FACTOR_WEIGHT.mediumIntent;
   } else if (intent === "creative") {
     factorScores["intent:creative"] = DETERMINISTIC_FACTOR_WEIGHT.creativeIntent;
   } else if (intent === "code") {
     factorScores["intent:code"] = DETERMINISTIC_FACTOR_WEIGHT.codeIntent;
   }
-  if (COMPLEX_INTENTS.has(intent)) {
+  const profileMarksSimple = intentClassification?.profile.complexity === "simple";
+  if (COMPLEX_INTENTS.has(intent) && !profileMarksSimple) {
     factorScores[`intent:${intent}`] = DETERMINISTIC_FACTOR_WEIGHT.complexIntent;
+  }
+  const taskEvidence = intentClassification?.task;
+  const profileEvidence = intentClassification?.profile;
+  if (profileEvidence?.recognized && profileEvidence.complexity === "complex") {
+    factorScores[`profile:${profileEvidence.domain}`] = profileEvidence.roleEvidence;
+  } else if (taskEvidence?.recognized) {
+    factorScores[`task:${taskEvidence.family}`] = taskEvidence.roleEvidence;
+  } else if (profileEvidence?.recognized) {
+    factorScores[`profile:${profileEvidence.domain}`] = profileEvidence.roleEvidence;
   }
   if (!automationContinuation && hasExplicitToolChoice(body)) {
     factorScores["explicit-tool-choice"] = DETERMINISTIC_FACTOR_WEIGHT.explicitToolChoice;
@@ -180,12 +211,14 @@ export function classifyAdaptiveTask(
   if (intent === "code") {
     if (HEAVY_CODE_RE.test(prompt)) {
       factorScores["code:heavy"] = DETERMINISTIC_FACTOR_WEIGHT.heavyCode;
-    } else if (LIGHT_CODE_RE.test(prompt)) {
+    } else if (intentClassification?.task.complexity !== "complex" && LIGHT_CODE_RE.test(prompt)) {
       factorScores["code:light"] = DETERMINISTIC_FACTOR_WEIGHT.lightCode;
     }
   }
   return classification(
-    Object.keys(factorScores).length > 0 ? factorScores : { none: NO_ROLE_SCORE }
+    Object.keys(factorScores).length > 0 ? factorScores : { none: NO_ROLE_SCORE },
+    intent,
+    intentClassification
   );
 }
 

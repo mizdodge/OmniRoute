@@ -345,10 +345,11 @@ reasoning reach the stronger pool.
 
 <table>
   <tr><th align="left">Stage</th><th align="left">What happens</th></tr>
-  <tr><td align="left" nowrap>1. Deterministic classifier</td><td align="left">Compares independent Fast and Strong evidence from the current request and bounded execution context — long IDE history or a large tool catalog cannot force Strong by themselves.</td></tr>
-  <tr><td align="left" nowrap>2. Optional AI Intent Classifier</td><td align="left">Runs only when the deterministic result is genuinely neutral or conflicting; clear Fast / Strong decisions add no extra model call.</td></tr>
-  <tr><td align="left" nowrap>3. Role-aware scoring</td><td align="left">Advanced Scoring Weights rank eligible models inside the active worker pool; the classifier chooses the role, not the final model.</td></tr>
-  <tr><td align="left" nowrap>4. Tier-safe fallback</td><td align="left">Fast → Strong → General, or Strong → Fast → General. Task routing and cache affinity can reorder within a tier, never jump across it.</td></tr>
+  <tr><td align="left" nowrap>1. Local request profile</td><td align="left">Detects ten supported languages, then composes task family, action, scope, domain, artifacts, complexity, constraints, and risk across coding/UI, documents, data, research, education, writing, creative, business, finance, legal, health, science, multimedia, and casual requests.</td></tr>
+  <tr><td align="left" nowrap>2. Bounded context resolver</td><td align="left">Uses only recent relevant turns and execution failures to resolve follow-ups such as “really?” without letting long IDE history force Strong.</td></tr>
+  <tr><td align="left" nowrap>3. Optional AI Intent Classifier</td><td align="left">Last-resort Fast / Strong decision for unsupported languages, genuinely unknown tasks, true score conflicts, or context-dependent requests that local evidence cannot resolve. Recognized local decisions add no model call.</td></tr>
+  <tr><td align="left" nowrap>4. Role-aware scoring</td><td align="left">Advanced Scoring Weights rank eligible models inside the active worker pool; the classifiers choose the role, not the final model.</td></tr>
+  <tr><td align="left" nowrap>5. Tier-safe fallback</td><td align="left">Fast → Strong → General, or Strong → Fast → General. Task routing and cache affinity can reorder within a tier, never jump across it.</td></tr>
 </table>
 
 <sub>📖 [Adaptive role pools, classifier flow & scoring](docs/routing/AUTO-COMBO.md#adaptive-model-roles)</sub>
@@ -561,7 +562,7 @@ the current catalog at **[radar.omniroute.online/planos](https://radar.omniroute
 
 > Recent highlights from **v3.8.20 → v3.8.51**. Full history in [`CHANGELOG.md`](CHANGELOG.md).
 
-- **🧠 Adaptive Fast / Strong workers** — Intelligent Auto Combos compare deterministic Fast Worker and Strong Reasoning scores first, call an optional AI Intent Classifier only for neutral or conflicting requests, apply role-specific Advanced Scoring Weights, and preserve tier-safe fallback. → [Auto-Combo](docs/routing/AUTO-COMBO.md#adaptive-model-roles)
+- **🧠 Adaptive Fast / Strong workers** — Intelligent Auto Combos detect ten languages and compose task family, action, scope, domain, artifacts, complexity, constraints, and risk, preserve the previous role for bounded contextual transformations such as Mermaid/table/summary follow-ups, call an optional AI Intent Classifier only as a last resort, apply role-specific Advanced Scoring Weights, and preserve tier-safe fallback. → [Auto-Combo](docs/routing/AUTO-COMBO.md#adaptive-model-roles)
 - **🎛️ OmniConductor** — inbound A2A delegation to your agent fleet, Conductor skills on the Agent Card, and a dashboard panel with Faro push-to-talk voice chat. → [A2A Server](docs/frameworks/A2A-SERVER.md)
 - **🛂 Adaptive admission & overload protection** — heavyweight chat requests queue instead of 503ing, with atomic RPM rolling leases per connection. → [Resilience Guide](docs/architecture/RESILIENCE_GUIDE.md)
 - **🗂️ Canonical `/v1/models` ordering** — one contiguous provider-grouped block per provider (combos pinned first), stable across every catalog source. → [API Reference](docs/reference/API_REFERENCE.md)

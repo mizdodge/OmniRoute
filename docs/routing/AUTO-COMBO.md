@@ -214,25 +214,90 @@ Persisted `auto` Combos can assign stable model Step IDs to two optional role po
 }
 ```
 
-The existing multilingual intent classifier supplies the base intent. Simple requests prefer Fast
-Worker, while math, reasoning, explicit required/named tool selection, and an extracted current-user
-request of at least 2,000 estimated tokens prefer Strong Reasoning. Coding requests are split by the
-actual request: routine formatting, renaming, lookup, or test-running work prefers Fast Worker;
-debugging, architecture, refactoring, migrations, and repository-wide work prefers Strong
-Reasoning; ambiguous coding remains neutral. Medium and creative requests also stay neutral unless
-a complexity signal is present. Rules classification is synchronous and performs no I/O or model
-call.
+The front language detector reports `languages`, `primary`, `mixed`, `supported`, `confidence`, and
+evidence signals for English, Brazilian Portuguese, Spanish, Indonesian, Chinese, Japanese,
+Russian, German, Korean, and Arabic. Script evidence handles Chinese, Japanese, Russian, Korean,
+and Arabic, while curated everyday markers distinguish the Latin-script languages and
+mixed-language requests. Clear unsupported scripts and requests with no reliable language evidence
+remain unresolved instead of being mislabeled as Medium.
+
+The Task Intent Detector then composes four independent local dimensions: task family, action mode,
+scope, and complexity. Its families cover casual/general questions, repository and file inspection,
+code inspection/change, debugging, testing, refactor/migration, architecture, documentation, data
+transformation, Git, DevOps, research/comparison, and security review. Action modes distinguish
+read-only requests from planning, modification, execution, and validation. Scope distinguishes one
+item, a bounded set, multiple files, repository-wide work, and system-wide work. A bounded exact
+lookup or routine edit prefers Fast Worker; debugging, architecture, security, migrations, and broad
+scope prefer Strong Reasoning. The detector is compositional rather than a full language dictionary,
+so technical verbs and artifacts can identify ordinary IDE tasks across all ten supported languages.
+It is synchronous and performs no I/O or model call.
+
+The Request Profile Detector adds a second, general-purpose local view. It identifies the request
+domain, named artifacts, routine/elevated/high risk, simple/complex work, and explicit output
+constraints. Domain coverage includes software engineering, UI/UX, data, documents, research,
+education, writing/language, creative work, business, finance, legal, health, cybersecurity,
+mathematics, science/engineering, personal advice, multimedia, and general knowledge. Artifacts are
+reported independently as source code, user interface, data, documents, media, configuration, and
+deployment. Profile evidence does not blindly compete with the more specific task family: a complex
+profile may upgrade a routine-looking task, while a task-specific complex result remains
+authoritative. Simple calculations and definitions are therefore not promoted merely because the
+legacy label is `math` or `reasoning`.
+
+Repository scope recognizes common project-level wording such as `whole project`, `entire project`,
+`whole solution`, `complete codebase`, and their Indonesian equivalents. Combined flow requests such
+as reading a whole solution and explaining its end-to-end function transitions are therefore
+architecture work with repository-wide, complex evidence rather than routine repository navigation.
+
+The legacy multilingual intent classifier remains as backward-compatible evidence for simple,
+code, math, reasoning, tool, and automation signals. An extracted current-user request of at least
+2,000 estimated tokens remains Strong evidence, while message history and advertised tool count do
+not. Explicit task evidence always outranks casual language.
+
+Casual intent is deterministic too. Greetings, thanks, laughter, coffee/chat invitations, and
+equivalent colloquial phrases in all ten supported languages can select Fast Worker without an AI
+call. Explicit task evidence always wins, so `bro debug race condition ini` remains engineering
+work rather than casual chat. Follow-up fragments such as `masa sih` are marked context-dependent,
+not automatically Fast.
+
+A separate Contextual Request Detector handles semantic follow-ups that are not casual, including
+requests to transform the previous result into Mermaid, another diagram, a table, a shorter summary,
+documentation, or code, plus explicit continue/clarify commands. It does not select Fast or Strong.
+It only marks the request as context-dependent so the bounded resolver can inherit the prior role.
+An explicit new target such as `create a new diagram for the payment service` remains an independent
+task, and a local pronoun such as `inspect the git diff and summarize it` refers to the current task
+rather than conversation history.
+
+The legacy intent label remains backward-compatible, but the adaptive router also consumes
+deterministic evidence. A recognized keyword has confidence above the deterministic gate. A default
+`medium` result with no matching keyword has low confidence. Supported-language unknown intent,
+unsupported language, and context-dependent conversation are distinct `reason` values rather than
+one combined signal. Non-empty low-confidence requests stay neutral unless the bounded local
+context resolver can safely inherit a recent Fast or Strong role. If local context cannot resolve
+the request, the configured AI Intent Classifier may run. If no classifier Step is configured, or
+its call fails, regular neutral Auto scoring continues without blocking the request. Disabled
+classification and empty requests do not force an AI call.
 
 `adaptiveJudgeModelRef` optionally enables an AI classification call before role selection. It is
 a single stable Step ID, and create/update normalization accepts it only when it points to a model
 Step in the same Combo. The Builder therefore exposes a single-select containing only that Combo's
-models. The classifier receives the extracted current user request plus a bounded summary of at
-most six recent meaningful user/assistant/tool events and compact execution metadata. It never
+models. Before any AI call, the local context resolver examines at most two recent user requests
+from the already bounded recent-work summary, applies recency decay, and uses recent repeated
+failures only as supporting Strong evidence. If intervening tool events evict the prior user turn
+from that six-event bound, the latest meaningful assistant summary is a constrained fallback source.
+A context-dependent follow-up after difficult debugging can inherit Strong, while the same text
+after casual conversation can inherit Fast. A new explicit task never inherits the older role.
+
+The AI classifier receives the extracted current user request plus a bounded summary of at most six
+recent meaningful user/assistant/tool events and compact execution metadata. It never
 receives the client's tool definitions. Conversation size and advertised tool count are capability
 metadata, not proof that the current task needs Strong Reasoning. The classifier must return exactly
-**FAST_WORKER** or **STRONG_REASONING** and is called only when deterministic rules remain neutral;
-clear Fast Worker and Strong Reasoning decisions bypass it. An HTTP error, timeout, missing/stale
-Step, or invalid verdict leaves the request neutral and never blocks the user's main request.
+**FAST_WORKER** or **STRONG_REASONING** and is called only after deterministic intent and local
+context remain unresolved: true Fast/Strong conflicts, missing context for a contextual follow-up,
+or unsupported/unrecognized language evidence. Clear Fast Worker and Strong Reasoning decisions
+bypass it. AI output remains a label-only decision: optional self-confidence
+fields are never compared with deterministic heuristic scores because those values are not
+calibrated to each other. An HTTP error, timeout, missing/stale Step, or invalid verdict leaves the
+request neutral and never blocks the user's main request.
 Successful decisions are cached for one hour by Combo, classifier execution target, extracted
 prompt, and bounded routing-context digest, with a 1,000-entry process-local bound. The same short
 prompt in a materially different execution state is therefore classified again.
@@ -812,18 +877,22 @@ intentionally excluded from CI because they require live credentials and VPS acc
 
 ## Files
 
-| File                                                      | Purpose                                                                    |
-| :-------------------------------------------------------- | :------------------------------------------------------------------------- |
-| `open-sse/services/autoCombo/scoring.ts`                  | Baseline and adaptive-role scoring, `DEFAULT_WEIGHTS`, normalization       |
-| `open-sse/services/autoCombo/taskClassification.ts`       | Deterministic request complexity and preferred-role classification         |
-| `open-sse/services/autoCombo/routingContext.ts`           | Bounded front context, capability metadata, and classifier cache digest    |
-| `open-sse/services/autoCombo/taskFitness.ts`              | Model × task fitness lookup                                                |
-| `open-sse/services/autoCombo/engine.ts`                   | Selection logic, bandit, budget cap                                        |
-| `open-sse/services/autoCombo/selfHealing.ts`              | Exclusion, probes, incident mode                                           |
-| `open-sse/services/autoCombo/modePacks.ts`                | 4 weight profiles (ship-fast, cost-saver, quality-first, offline-friendly) |
-| `open-sse/services/autoCombo/autoPrefix.ts`               | `auto/` prefix parser + 6 variants                                         |
-| `open-sse/services/autoCombo/virtualFactory.ts`           | Builds in-memory `AutoComboConfig` from live connections                   |
-| `open-sse/services/autoCombo/providerRegistryAccessor.ts` | Test hook for mocking provider registry                                    |
-| `open-sse/services/combo/rolePools.ts`                    | Stable Step-ID role resolution and finite role-aware fallback order        |
-| `src/shared/constants/routingStrategies.ts`               | `ROUTING_STRATEGY_VALUES` (19 strategies)                                  |
-| `src/sse/handlers/chat.ts`                                | Integration: auto-prefix short-circuit                                     |
+| File                                                         | Purpose                                                                    |
+| :----------------------------------------------------------- | :------------------------------------------------------------------------- |
+| `open-sse/services/autoCombo/scoring.ts`                     | Baseline and adaptive-role scoring, `DEFAULT_WEIGHTS`, normalization       |
+| `open-sse/services/taskIntentDetector.ts`                    | Compositional task family, action, scope, complexity, and role evidence    |
+| `open-sse/services/intentLanguageDetector.ts`                | Supported/mixed language detection and evidence                            |
+| `open-sse/services/casualIntentDetector.ts`                  | Guarded multilingual casual-intent detection                               |
+| `open-sse/services/autoCombo/taskClassification.ts`          | Combines local intent evidence into deterministic Fast/Strong scores       |
+| `open-sse/services/autoCombo/conversationContextResolver.ts` | Bounded local resolution for context-dependent follow-ups                  |
+| `open-sse/services/autoCombo/routingContext.ts`              | Bounded front context, capability metadata, and classifier cache digest    |
+| `open-sse/services/autoCombo/taskFitness.ts`                 | Model × task fitness lookup                                                |
+| `open-sse/services/autoCombo/engine.ts`                      | Selection logic, bandit, budget cap                                        |
+| `open-sse/services/autoCombo/selfHealing.ts`                 | Exclusion, probes, incident mode                                           |
+| `open-sse/services/autoCombo/modePacks.ts`                   | 4 weight profiles (ship-fast, cost-saver, quality-first, offline-friendly) |
+| `open-sse/services/autoCombo/autoPrefix.ts`                  | `auto/` prefix parser + 6 variants                                         |
+| `open-sse/services/autoCombo/virtualFactory.ts`              | Builds in-memory `AutoComboConfig` from live connections                   |
+| `open-sse/services/autoCombo/providerRegistryAccessor.ts`    | Test hook for mocking provider registry                                    |
+| `open-sse/services/combo/rolePools.ts`                       | Stable Step-ID role resolution and finite role-aware fallback order        |
+| `src/shared/constants/routingStrategies.ts`                  | `ROUTING_STRATEGY_VALUES` (19 strategies)                                  |
+| `src/sse/handlers/chat.ts`                                   | Integration: auto-prefix short-circuit                                     |

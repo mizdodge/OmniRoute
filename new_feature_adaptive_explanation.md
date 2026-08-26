@@ -928,6 +928,34 @@ concerns separate:
 - **capability metadata**: total input size, requested output, message count, and advertised tools
   constrain what a model can execute but do not imply reasoning difficulty.
 
+Before the Fast/Strong scores are combined, the local **Task Intent Detector** decomposes the current
+request into task family, action mode, scope, and complexity. This prevents one overloaded keyword
+from deciding the route. For example, comparing IDs in two XML files is
+`fileInspection + readOnly + bounded + simple`, while investigating an intermittent race across the
+repository is `debugging + validate + repositoryWide + complex`. The former supplies Fast evidence;
+the latter supplies Strong evidence. Supported families include routine coding, inspection,
+documentation, data transformation, Git/DevOps, testing, refactoring/migration, architecture,
+research/comparison, security review, general questions, and casual conversation.
+
+The detector uses compact multilingual task verbs and artifact terms rather than a comprehensive
+dictionary. Language detection still establishes whether the request is supported, and genuinely
+unknown or unsupported requests remain eligible for the AI Intent Classifier. Recognized work does
+not add a classifier call.
+
+Project-wide scope includes natural variants such as `whole project`, `entire solution`,
+`complete codebase`, `seluruh proyek`, and `keseluruhan solusi`. A request to read the whole
+solution, explain its flow, and identify the function that advances each step is consequently
+classified as repository-wide architecture work and supplies deterministic Strong evidence.
+
+A general-purpose **Request Profile Detector** runs beside it. It recognizes domain, artifacts,
+risk, complexity, and explicit constraints for software/UI, documents, data, research, education,
+writing, creative work, business, finance, legal, health, cybersecurity, mathematics, science,
+personal advice, multimedia, and general knowledge. Artifact signals independently name source
+code, user interfaces, data, documents, media, configuration, and deployment. Complex profile
+evidence may upgrade an otherwise routine-looking task, but a simple domain signal cannot cancel a
+specific debugging, migration, architecture, or security decision. This keeps a lime-theme edit
+deterministically Fast while distributed debugging remains Strong.
+
 Adaptive Deterministic reports independent `fastScore` and `strongScore` values from `0.000` to
 `1.000`, their absolute `margin`, and each factor's Fast/Strong contribution. Evidence is combined
 with `1 - product(1 - contribution)`, so several signals can reinforce a role without allowing its
@@ -935,13 +963,39 @@ score to exceed `1.000`. These values measure local heuristic evidence only. The
 Advanced Scoring Weights, provider health, quota, latency, cost, concrete-model scores, or the AI
 classifier verdict, and they are not probabilities.
 
-A deterministic role is emitted only when the higher score reaches `minScore=0.350` and the margin
-reaches `minMargin=0.180`. Otherwise the role remains `neutral`; that is the only normal path that
-invokes the configured AI Intent Classifier.
+A deterministic role is emitted only when the higher score reaches `minScore=0.350`, the margin
+reaches `minMargin=0.180`, and the request has recognized evidence. A dedicated front detector
+reports supported-language evidence for English, Indonesian, Brazilian Portuguese, Spanish,
+Chinese, Japanese, Russian, German, Korean, and Arabic, including mixed-language requests.
+Unsupported scripts, supported-language unknown intent, and context-dependent conversation now
+have separate `reason` values.
 
-When deterministic classification remains neutral, the optional AI Intent Classifier immediately
-receives the bounded context before the main Auto scoring pass. Its cache key includes a context
+Casual conversation is handled locally across the same ten languages. Everyday greetings, thanks,
+laughter, and invitations such as `woi ngopi lah bro` deterministically select Fast Worker without
+an AI call. Task guards run first: `bro debug race condition ini` remains a code request. Ambiguous
+follow-ups such as `masa sih, masih ga percaya gua` are not guessed as casual.
+
+A separate Contextual Request Detector recognizes non-casual semantic follow-ups. Format
+transformations such as `could you please explain it in a Mermaid diagram?`, tabulating the previous
+comparison, shortening the same analysis, converting it to documentation/code, and explicit
+continue/clarify commands are marked context-dependent. This stage chooses no worker role. It only
+allows the bounded Context Resolver to preserve the role of the relevant prior task. Explicit new
+targets and pronouns resolved inside the current sentence remain independent tasks.
+
+For a context-dependent follow-up, a local resolver inspects no more than two recent user requests
+from the bounded six-event summary. If tool events have pushed those turns outside the bound, it may
+use at most two recent meaningful assistant summaries as a constrained fallback. It applies recency
+decay and can inherit a recent Fast/Strong role; repeated tool failures only reinforce an already
+relevant Strong continuation. It never reads the full conversation to infer difficulty, and a new
+explicit task never inherits an older role.
+
+Only when deterministic classification and the local context resolver remain neutral does the
+optional AI Intent Classifier receive the bounded context before the main Auto scoring pass. Its
+cache key includes a context
 digest, so identical text such as `continue` is rejudged when recent execution state changes.
+The AI verdict remains label-only. Optional AI self-confidence is not compared with deterministic
+scores because the two scales are not calibrated. If the classifier is not configured or fails,
+the request continues through regular neutral Auto scoring.
 Legacy task-aware fallback ordering consumes the final front role decision: it
 retains raw input size for context-window fit but cannot independently promote a Fast request to
 Heavy/Critical because the conversation happens to be long.
@@ -985,9 +1039,14 @@ Adaptive task-route decisions now expose the categorized fallback plan directly 
 Strong Reasoning decision can look like:
 
 ```text
-[STEP] Adaptive Deterministic : role=neutral | complexity=neutral | fastScore=0.320 | strongScore=0.250 | margin=0.070 | minScore=0.350 | minMargin=0.180 | factors=intent:creative(F=0.150,S=0.250),short-current-request(F=0.200,S=0.000) | signals=intent:creative,short-current-request
-[STEP] AI Intent Classifier : selected | role=strongReasoning | model=<classifier-model>
-[STEP] Adaptive-Router : role=strongReasoning | activePool=strongReasoning | poolSize=3 | intent=creative | task=default | signals=ai-judge:<step-id> | strategy=rules
+[STEP] Language Detector : primary=id | languages=id | mixed=false | supported=true | confidence=0.810 | reason=supported-language | signals=language:id:2
+[STEP] Task Intent Detector : family=unknown | action=unknown | scope=unknown | complexity=unknown | confidence=0.000 | reason=unrecognized-task-family | fastEvidence=0.000 | strongEvidence=0.000 | signals=task-family:unknown,action:unknown,scope:unknown
+[STEP] Request Profile Detector : domain=unknown | artifacts=none | risk=unknown | complexity=unknown | constraints=0 | confidence=0.000 | reason=unrecognized-request-profile | fastEvidence=0.000 | strongEvidence=0.000 | signals=profile-domain:unknown,profile-risk:unknown,profile-complexity:unknown
+[STEP] Contextual Request Detector : dependent=false | operation=unknown | format=unknown | confidence=0.000 | reason=independent-request | signals=contextual-operation:unknown,format:unknown
+[STEP] Adaptive Deterministic : role=neutral | complexity=neutral | reason=unrecognized-intent | intentScore=0.000 | casualScore=0.000 | fastScore=0.480 | strongScore=0.000 | margin=0.480 | minScore=0.350 | minMargin=0.180 | factors=intent:medium(F=0.350,S=0.000),short-current-request(F=0.200,S=0.000) | signals=intent:medium,short-current-request
+[STEP] Context Resolver : status=skipped | role=neutral | reason=not-context-dependent | score=0.000 | previousRole=none | contextAge=none | signals=current-request-independent
+[STEP] AI Intent Classifier : selected | role=strongReasoning | reason=unrecognized-intent | model=<classifier-model>
+[STEP] Adaptive-Router : role=strongReasoning | activePool=strongReasoning | poolSize=3 | reason=ai-classifier | intent=medium | task=default | signals=ai-judge:<step-id> | strategy=rules
 [STEP] Task-Route : task=heavy (adaptive-role:strongReasoning) | scope=selection-and-fallback | selected=<selected-strong-model> | pools=strongReasoning:[<selected-strong-model>,<strong-2>,<strong-3>] > fastWorker:[<fast-1>,<fast-2>] > general:[<general-1>] | cacheKey=<key>
 ```
 
@@ -1011,19 +1070,26 @@ runner reports them; `status.md` keeps that validation state explicit.
 
 ---
 
-## Restored 3.8.50 AI Classifier Flow
+## Extended 3.8.50 AI Classifier Flow
 
-The neutral path follows the 3.8.50 execution hierarchy:
+The original deterministic-first hierarchy remains, with language and bounded-context stages in
+front of the last-resort AI call:
 
 ```text
-Deterministic Fast/Strong
-  → use that role directly
-
-Deterministic neutral
-  → configured AI Intent Classifier
-      → FAST_WORKER       → Fast Worker role
-      → STRONG_REASONING  → Strong Reasoning role
-      → failure/invalid   → neutral Auto scoring
+Language Detector
+  → Task Intent Detector (family + action + scope + complexity)
+    → Request Profile Detector (domain + artifacts + risk + constraints)
+      → Contextual Request Detector (independent / transform / continue / clarify)
+        → Deterministic task/casual/profile score combiner
+        → clear Fast/Strong  → use that role directly
+        → context-dependent → bounded Context Resolver
+            → resolved      → use inherited recent role
+            → unresolved    → configured AI Intent Classifier
+        → unsupported/unknown language or true score conflict
+            → configured AI Intent Classifier
+        → FAST_WORKER       → Fast Worker role
+        → STRONG_REASONING  → Strong Reasoning role
+        → failure/invalid   → neutral Auto scoring
 ```
 
 The AI call still uses only the configured Combo Step and remains fail-open. It chooses a role, not
@@ -1031,6 +1097,7 @@ the concrete executor model. The normal Auto scorer prepares the ranked role poo
 is known; Task-Route selects the concrete executor inside the active pool. The categorized fallback
 contract remains Strong → Fast → General or Fast → Strong → General.
 
-Focused regression coverage in `tests/unit/combo-resolve-auto-strategy-split.test.ts` proves that an
-ordinary Medium request is resolved to Fast without an AI call, while a genuinely neutral request
-calls the classifier exactly once.
+Focused regression coverage proves that recognized task/casual requests bypass the AI call, a
+context-dependent Indonesian follow-up is resolved from bounded recent work when possible, and
+unsupported-language requests call the classifier exactly once. Missing or failed classifiers
+preserve seamless neutral Auto routing.

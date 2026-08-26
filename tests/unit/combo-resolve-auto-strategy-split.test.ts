@@ -347,11 +347,52 @@ test("adaptive auto emits readable named pipeline checkpoints", async () => {
   assert.ok(
     infoLogs.some((message) =>
       message.startsWith(
+        "[STEP] Language Detector : primary=en | languages=en | mixed=false | " +
+          "supported=true | confidence="
+      )
+    )
+  );
+  assert.ok(
+    infoLogs.some((message) =>
+      message.startsWith(
+        "[STEP] Task Intent Detector : family=unknown | action=unknown | scope=unknown | " +
+          "complexity=unknown | confidence=0.000 | reason=unrecognized-task-family | " +
+          "fastEvidence=0.000 | strongEvidence=0.000 | signals="
+      )
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] Request Profile Detector : domain=unknown | artifacts=none | risk=unknown | " +
+        "complexity=unknown | constraints=0 | confidence=0.000 | " +
+        "reason=unrecognized-request-profile | fastEvidence=0.000 | strongEvidence=0.000 | " +
+        "signals=profile-domain:unknown,profile-risk:unknown,profile-complexity:unknown"
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] Contextual Request Detector : dependent=false | operation=unknown | " +
+        "format=unknown | confidence=0.000 | reason=independent-request | " +
+        "signals=contextual-operation:unknown,format:unknown"
+    )
+  );
+  assert.ok(
+    infoLogs.some((message) =>
+      message.startsWith(
         "[STEP] Adaptive Deterministic : role=fastWorker | complexity=simple | " +
+          "reason=recognized-simple-intent | " +
+          "intentScore=0.900 | casualScore=0.000 | " +
           "fastScore=0.800 | strongScore=0.000 | margin=0.800 | " +
           "minScore=0.350 | minMargin=0.180 | " +
           "factors=intent:simple(F=0.750,S=0.000),short-current-request(F=0.200,S=0.000) | signals="
       )
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] Context Resolver : status=skipped | role=neutral | " +
+        "reason=deterministic-confident | score=0.000 | previousRole=none | " +
+        "contextAge=none | signals=deterministic-role"
     )
   );
   assert.ok(
@@ -535,9 +576,19 @@ test("exploration cannot cross from a routable Fast Worker pool into Strong Reas
   );
 });
 
-test("heuristic Medium score selects Fast without spending an AI classifier call", async () => {
-  const deps = adaptiveDeps("adaptive-medium-fast-without-ai", "classify these items");
+test("unrecognized Indonesian intent uses the AI classifier before selecting a role pool", async () => {
+  const infoLogs: string[] = [];
+  const deps = adaptiveDeps(
+    "adaptive-indonesian-neutral-with-ai",
+    "Menurut kamu bagaimana hasil ini?"
+  );
   deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  deps.log = {
+    ...noopLog,
+    info(_tag: unknown, message: unknown) {
+      infoLogs.push(String(message));
+    },
+  };
   let classifierCalls = 0;
   deps.handleSingleModel = (async () => {
     classifierCalls += 1;
@@ -546,14 +597,178 @@ test("heuristic Medium score selects Fast without spending an AI classifier call
 
   const result = await resolveAutoStrategyOrder(deps);
 
+  assert.equal(classifierCalls, 1);
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
+  assert.equal(result.adaptiveTask.decisionSource, "ai_tiebreaker");
+  assert.equal(result.adaptiveTask.decisionReason, "ai-classifier");
+  assert.ok(
+    infoLogs.some(
+      (message) =>
+        message.startsWith("[STEP] Adaptive Deterministic : role=neutral") &&
+        message.includes("reason=unrecognized-intent")
+    )
+  );
+  assert.ok(
+    infoLogs.some(
+      (message) =>
+        message.startsWith("[STEP] AI Intent Classifier : selected") &&
+        message.includes("reason=unrecognized-intent")
+    )
+  );
+  assert.ok(
+    infoLogs.some(
+      (message) =>
+        message.startsWith("[STEP] Adaptive-Router : role=strongReasoning") &&
+        message.includes("reason=ai-classifier")
+    )
+  );
+});
+
+test("unrecognized language remains seamless when no AI classifier is configured", async () => {
+  const result = await resolveAutoStrategyOrder(
+    adaptiveDeps("adaptive-unsupported-no-ai", "ช่วยตรวจสอบเรื่องนี้อย่างละเอียด")
+  );
+
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.adaptiveTask.preferredRole, null);
+  assert.equal(result.adaptiveTask.decisionSource, "fallback");
+  assert.equal(result.adaptiveTask.decisionReason, "ai-classifier-not-configured");
+  assert.equal(result.orderedTargets.length, 3);
+});
+
+test("bounded recent context resolves an ambiguous follow-up before the AI classifier", async () => {
+  const infoLogs: string[] = [];
+  const deps = adaptiveDeps("adaptive-context-before-ai", "masa sih, masih ga percaya gua");
+  deps.body = {
+    messages: [
+      { role: "user", content: "trace root cause race condition dan refactor arsitekturnya" },
+      { role: "assistant", content: "I traced the concurrent state transitions." },
+      { role: "user", content: "masa sih, masih ga percaya gua" },
+    ],
+  };
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  deps.log = {
+    ...noopLog,
+    info(_tag: unknown, message: unknown) {
+      infoLogs.push(String(message));
+    },
+  };
+  let classifierCalls = 0;
+  deps.handleSingleModel = (async () => {
+    classifierCalls += 1;
+    return Response.json({ choices: [{ message: { content: "FAST_WORKER" } }] });
+  }) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
   assert.equal(classifierCalls, 0);
   assert.ok("orderedTargets" in result);
   if (!("orderedTargets" in result)) return;
-  assert.equal(result.orderedTargets[0]?.stepId, "fast-step");
+  assert.equal(result.adaptiveTask.preferredRole, "strongReasoning");
+  assert.equal(result.adaptiveTask.decisionSource, "deterministic");
+  assert.equal(result.adaptiveTask.decisionReason, "reasoning-context-followup");
+  assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
+  assert.ok(
+    infoLogs.some(
+      (message) =>
+        message.startsWith("[STEP] Context Resolver : status=resolved") &&
+        message.includes("reason=reasoning-context-followup")
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] AI Intent Classifier : skipped | reason=context-resolved | role=strongReasoning"
+    )
+  );
+  assert.equal(
+    infoLogs.some((message) => message.startsWith("[STEP]") && message.includes("masa sih")),
+    false,
+    "routing checkpoints expose reasons and signals, never raw user text"
+  );
+});
+
+test("a Mermaid format follow-up inherits whole-project Strong routing before AI", async () => {
+  const infoLogs: string[] = [];
+  const prompt = "Could you please explain it in a Mermaid diagram?";
+  const deps = adaptiveDeps("adaptive-contextual-format-before-ai", prompt);
+  deps.body = {
+    messages: [
+      {
+        role: "user",
+        content: "Read the whole solution and explain the end-to-end architecture flow.",
+      },
+      {
+        role: "assistant",
+        content: "I traced the complete request lifecycle across the repository.",
+      },
+      { role: "user", content: prompt },
+    ],
+  };
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  deps.log = {
+    ...noopLog,
+    info(_tag: unknown, message: unknown) {
+      infoLogs.push(String(message));
+    },
+  };
+  let classifierCalls = 0;
+  deps.handleSingleModel = (async () => {
+    classifierCalls += 1;
+    return Response.json({ choices: [{ message: { content: "FAST_WORKER" } }] });
+  }) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.equal(classifierCalls, 0);
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.adaptiveTask.preferredRole, "strongReasoning");
+  assert.equal(result.adaptiveTask.decisionReason, "reasoning-context-followup");
+  assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
+  assert.ok(
+    infoLogs.some(
+      (message) =>
+        message.startsWith("[STEP] Contextual Request Detector : dependent=true") &&
+        message.includes("operation=transformPrevious") &&
+        message.includes("format=mermaid")
+    )
+  );
+  assert.ok(
+    infoLogs.includes(
+      "[STEP] AI Intent Classifier : skipped | reason=context-resolved | role=strongReasoning"
+    )
+  );
+  assert.equal(
+    infoLogs.some((message) => message.startsWith("[STEP]") && message.includes(prompt)),
+    false,
+    "routing checkpoints expose classifications, never raw user text"
+  );
+});
+
+test("AI classifier failure falls back to regular Auto routing", async () => {
+  const deps = adaptiveDeps("adaptive-unsupported-ai-failure", "ช่วยตรวจสอบเรื่องนี้อย่างละเอียด");
+  deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
+  deps.handleSingleModel = (async () =>
+    Response.json({ choices: [{ message: { content: "UNSURE" } }] })) as never;
+
+  const result = await resolveAutoStrategyOrder(deps);
+
+  assert.ok("orderedTargets" in result);
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.adaptiveTask.preferredRole, null);
+  assert.equal(result.adaptiveTask.decisionSource, "fallback");
+  assert.equal(result.adaptiveTask.decisionReason, "ai-classifier-failed");
+  assert.equal(result.orderedTargets.length, 2, "judge-only Step stays outside the worker pool");
 });
 
 test("AI classifier runs only when heuristic Fast and Strong scores remain neutral", async () => {
-  const deps = adaptiveDeps("adaptive-ai-classifier-neutral-only", "write a poem about rain");
+  const deps = adaptiveDeps(
+    "adaptive-ai-classifier-neutral-only",
+    "Handle the thing appropriately."
+  );
   deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
   let classifierCalls = 0;
   deps.handleSingleModel = (async () => {
@@ -569,8 +784,8 @@ test("AI classifier runs only when heuristic Fast and Strong scores remain neutr
   assert.equal(result.orderedTargets[0]?.stepId, "strong-step");
 });
 
-test("configured AI Judger overrides rules using its one selected Combo Step", async () => {
-  const deps = adaptiveDeps("adaptive-ai-judge", "write a poem about rain");
+test("configured AI Intent Classifier resolves ambiguity using its selected Combo Step", async () => {
+  const deps = adaptiveDeps("adaptive-ai-judge", "Handle the thing appropriately.");
   deps.combo.autoConfig.adaptiveJudgeModelRef = "ordinary-step";
   let judgeCalls = 0;
   deps.handleSingleModel = (async (body, modelStr, target) => {
@@ -594,7 +809,7 @@ test("configured AI Judger overrides rules using its one selected Combo Step", a
   );
 });
 
-test("AI Judger is skipped when deterministic rules already choose Fast or Strong", async () => {
+test("AI Intent Classifier is skipped when deterministic rules already choose Fast or Strong", async () => {
   let judgeCalls = 0;
   for (const [name, prompt, expected] of [
     ["fast", "hi", "fast-step"],
