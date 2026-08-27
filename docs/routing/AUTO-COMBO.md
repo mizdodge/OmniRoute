@@ -195,7 +195,20 @@ that role, keeping the final distribution normalized.
 
 ## Adaptive Model Roles
 
-Persisted `auto` Combos can assign stable model Step IDs to two optional role pools:
+Adaptive routing answers two questions in order:
+
+1. **Which worker role fits this request?** Fast Worker or Strong Reasoning.
+2. **Which concrete model should execute it?** Auto scoring ranks only the eligible models in that
+   role first.
+
+> **In one sentence:** local detectors handle clear requests for free; bounded context resolves
+> follow-ups; the optional AI Intent Classifier is the last resort; Task-Route then exposes the
+> selected model and ordered fallback pools.
+
+### Minimal Configuration
+
+Persisted `auto` Combos assign stable model Step IDs to two optional role pools. One additional
+Step may act as the AI Intent Classifier:
 
 ```json
 {
@@ -214,137 +227,147 @@ Persisted `auto` Combos can assign stable model Step IDs to two optional role po
 }
 ```
 
-The front language detector reports `languages`, `primary`, `mixed`, `supported`, `confidence`, and
-evidence signals for English, Brazilian Portuguese, Spanish, Indonesian, Chinese, Japanese,
-Russian, German, Korean, and Arabic. Script evidence handles Chinese, Japanese, Russian, Korean,
-and Arabic, while curated everyday markers distinguish the Latin-script languages and
-mixed-language requests. Clear unsupported scripts and requests with no reliable language evidence
-remain unresolved instead of being mislabeled as Medium.
+### Decision Map
 
-The Task Intent Detector then composes four independent local dimensions: task family, action mode,
-scope, and complexity. Its families cover casual/general questions, repository and file inspection,
-code inspection/change, debugging, testing, refactor/migration, architecture, documentation, data
-transformation, Git, DevOps, research/comparison, and security review. Action modes distinguish
-read-only requests from planning, modification, execution, and validation. Scope distinguishes one
-item, a bounded set, multiple files, repository-wide work, and system-wide work. A bounded exact
-lookup or routine edit prefers Fast Worker; debugging, architecture, security, migrations, and broad
-scope prefer Strong Reasoning. The detector is compositional rather than a full language dictionary,
-so technical verbs and artifacts can identify ordinary IDE tasks across all ten supported languages.
-It is synchronous and performs no I/O or model call.
+```text
+Current user request
+  ↓
+Language → Task → Request Profile → Casual / Contextual detectors
+  ↓
+Adaptive Deterministic scoring
+  ├─ clear Fast   → Fast Worker pool
+  ├─ clear Strong → Strong Reasoning pool
+  └─ neutral
+       ↓
+     Bounded Context Resolver
+       ├─ resolved   → inherit the recent Fast/Strong role
+       └─ unresolved → optional AI Intent Classifier
+                         ├─ fast-worker verdict      → Fast Worker pool
+                         ├─ strong-reasoning verdict → Strong Reasoning pool
+                         └─ unavailable      → neutral Auto scoring
+  ↓
+Auto scoring selects one model inside the active pool
+  ↓
+Task-Route publishes the selected model and ordered fallback pools
+```
 
-The Request Profile Detector adds a second, general-purpose local view. It identifies the request
-domain, named artifacts, routine/elevated/high risk, simple/complex work, and explicit output
-constraints. Domain coverage includes software engineering, UI/UX, data, documents, research,
-education, writing/language, creative work, business, finance, legal, health, cybersecurity,
-mathematics, science/engineering, personal advice, multimedia, and general knowledge. Artifacts are
-reported independently as source code, user interface, data, documents, media, configuration, and
-deployment. Profile evidence does not blindly compete with the more specific task family: a complex
-profile may upgrade a routine-looking task, while a task-specific complex result remains
-authoritative. Simple calculations and definitions are therefore not promoted merely because the
-legacy label is `math` or `reasoning`.
+### What Runs Locally?
 
-Repository scope recognizes common project-level wording such as `whole project`, `entire project`,
-`whole solution`, `complete codebase`, and their Indonesian equivalents. Combined flow requests such
-as reading a whole solution and explaining its end-to-end function transitions are therefore
-architecture work with repository-wide, complex evidence rather than routine repository navigation.
+Every stage below is synchronous and performs no model call. Evidence is compositional: a task can
+be casual in tone, about source code, repository-wide, and complex at the same time.
 
-The legacy multilingual intent classifier remains as backward-compatible evidence for simple,
-code, math, reasoning, tool, and automation signals. An extracted current-user request of at least
-2,000 estimated tokens remains Strong evidence, while message history and advertised tool count do
-not. Explicit task evidence always outranks casual language.
+| Stage                        | What it extracts                                                    | Examples of recognized evidence                                                                        |
+| :--------------------------- | :------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------- |
+| **Language Detector**        | Primary language, mixed-language flag, support status, confidence   | English, Brazilian Portuguese, Spanish, Indonesian, Chinese, Japanese, Russian, German, Korean, Arabic |
+| **Task Intent Detector**     | Task family, action, scope, complexity                              | Inspect, modify, debug, test, refactor, architecture, docs, data, Git, DevOps, research, security      |
+| **Request Profile Detector** | Domain, artifacts, risk, complexity, constraints                    | UI/UX, finance, legal, health, science; code, UI, data, documents, media, config, deployment           |
+| **Casual Detector**          | Clear conversation versus a context-dependent fragment              | Greetings, thanks, laughter, coffee/chat invitations; `masa sih` remains contextual                    |
+| **Contextual Detector**      | Whether the request transforms, continues, or clarifies recent work | “show it in Mermaid”, “continue”, “make that shorter”                                                  |
+| **Adaptive Deterministic**   | Independent Fast and Strong evidence plus the winning margin        | Routine bounded edit → Fast; cross-system debugging → Strong                                           |
 
-Casual intent is deterministic too. Greetings, thanks, laughter, coffee/chat invitations, and
-equivalent colloquial phrases in all ten supported languages can select Fast Worker without an AI
-call. Explicit task evidence always wins, so `bro debug race condition ini` remains engineering
-work rather than casual chat. Follow-up fragments such as `masa sih` are marked context-dependent,
-not automatically Fast.
+The legacy multilingual classifier remains backward-compatible evidence for simple, code, math,
+reasoning, tool, and automation signals. Task-specific evidence wins over casual tone, so
+`bro debug race condition ini` remains engineering work. A complex Request Profile may upgrade a
+routine-looking task, but a simple domain label cannot cancel specific debugging, migration,
+architecture, or security evidence.
 
-A separate Contextual Request Detector handles semantic follow-ups that are not casual, including
-requests to transform the previous result into Mermaid, another diagram, a table, a shorter summary,
-documentation, or code, plus explicit continue/clarify commands. It does not select Fast or Strong.
-It only marks the request as context-dependent so the bounded resolver can inherit the prior role.
-An explicit new target such as `create a new diagram for the payment service` remains an independent
-task, and a local pronoun such as `inspect the git diff and summarize it` refers to the current task
-rather than conversation history.
+### Examples
 
-The legacy intent label remains backward-compatible, but the adaptive router also consumes
-deterministic evidence. A recognized keyword has confidence above the deterministic gate. A default
-`medium` result with no matching keyword has low confidence. Supported-language unknown intent,
-unsupported language, and context-dependent conversation are distinct `reason` values rather than
-one combined signal. Non-empty low-confidence requests stay neutral unless the bounded local
-context resolver can safely inherit a recent Fast or Strong role. If local context cannot resolve
-the request, the configured AI Intent Classifier may run. If no classifier Step is configured, or
-its call fails, regular neutral Auto scoring continues without blocking the request. Disabled
-classification and empty requests do not force an AI call.
+| Request                                               | Local interpretation                    | Result                        | AI call?                         |
+| :---------------------------------------------------- | :-------------------------------------- | :---------------------------- | :------------------------------- |
+| `update this UI theme to lime`                        | UI change, bounded, routine             | **Fast Worker**               | No                               |
+| `compare the IDs in these two XML files`              | Read-only inspection, bounded set       | **Fast Worker**               | No                               |
+| `trace this intermittent race across the repository`  | Debugging, repository-wide, complex     | **Strong Reasoning**          | No                               |
+| `audit this authentication design for security flaws` | Security review, high-risk analysis     | **Strong Reasoning**          | No                               |
+| `could you explain it in Mermaid?`                    | Context-dependent format transformation | Inherit recent role           | Only if local context is missing |
+| Unsupported language or a true Fast/Strong conflict   | Deterministic evidence remains neutral  | AI classifier or neutral Auto | If configured                    |
 
-`adaptiveJudgeModelRef` optionally enables an AI classification call before role selection. It is
-a single stable Step ID, and create/update normalization accepts it only when it points to a model
-Step in the same Combo. The Builder therefore exposes a single-select containing only that Combo's
-models. Before any AI call, the local context resolver examines at most two recent user requests
-from the already bounded recent-work summary, applies recency decay, and uses recent repeated
-failures only as supporting Strong evidence. If intervening tool events evict the prior user turn
-from that six-event bound, the latest meaningful assistant summary is a constrained fallback source.
-A context-dependent follow-up after difficult debugging can inherit Strong, while the same text
-after casual conversation can inherit Fast. A new explicit task never inherits the older role.
+Repository scope recognizes wording such as `whole project`, `entire solution`, `complete
+codebase`, and Indonesian equivalents. Input length is measured from the extracted current request:
+at least 2,000 estimated current-request tokens add Strong evidence, while accumulated conversation
+length and advertised tool count do not.
 
-The AI classifier receives the extracted current user request plus a bounded summary of at most six
-recent meaningful user/assistant/tool events and compact execution metadata. It never
-receives the client's tool definitions. Conversation size and advertised tool count are capability
-metadata, not proof that the current task needs Strong Reasoning. The classifier must return exactly
-**FAST_WORKER** or **STRONG_REASONING** and is called only after deterministic intent and local
-context remain unresolved: true Fast/Strong conflicts, missing context for a contextual follow-up,
-or unsupported/unrecognized language evidence. Clear Fast Worker and Strong Reasoning decisions
-bypass it. AI output remains a label-only decision: optional self-confidence
-fields are never compared with deterministic heuristic scores because those values are not
-calibrated to each other. An HTTP error, timeout, missing/stale Step, or invalid verdict leaves the
-request neutral and never blocks the user's main request.
-Successful decisions are cached for one hour by Combo, classifier execution target, extracted
-prompt, and bounded routing-context digest, with a 1,000-entry process-local bound. The same short
-prompt in a materially different execution state is therefore classified again.
-The internal judge call is non-streaming, is excluded from Context Relay/session-affinity tracking,
-and still passes through normal provider authentication, circuit breakers, and request sanitization.
-A judge Step that is not also selected in Fast Worker or Strong Reasoning is judge-only: it is
-excluded from scoring, continuity/affinity reordering, final responses, and the worker fallback tail.
-Selecting the same Step in a worker role explicitly allows it to serve both roles.
+### AI Intent Classifier: Last Resort, Not the Main Router
 
-Intent is derived from the current human request, not client metadata. Ordinary chat content is used
-as-is; IDE envelopes with tags such as `<userRequest>`/`<user_request>` are reduced to the last
-explicit request while environment, workspace, editor, memory, and reminder blocks are ignored.
-System prompts and merely available tool schemas do not promote a request. An explicit tool choice
-is ignored on an assistant/tool continuation because it describes the ongoing automation protocol,
-not a new complexity request. Long-input promotion uses the extracted current request rather than
-accumulated conversation history. Two recent failed tool events can promote an ambiguous
-fix/debug/continue request, while total input size remains a context-window capability requirement.
+Set `adaptiveJudgeModelRef` to one model Step from the same Combo. The classifier runs only when
+deterministic evidence and bounded context cannot choose a role.
 
-Role membership is resolved only after ordinary eligibility filtering. It cannot restore a target
-excluded by capability, context, quota, connection cooldown, model lockout, or circuit-breaker
-rules. For the standard rules router, primary scoring and epsilon exploration are scoped to the
-preferred role whenever that pool has a routable candidate; exploration therefore cannot send a
-Simple request to Strong Reasoning. Once Auto selects its primary, the legacy task-aware and
-prompt-cache-affinity stages may reorder only the fallback tail; neither may replace that primary.
-For Auto, fallback task-power ordering is aligned with the front Fast/Strong decision. Raw history
-size is retained only for context-capacity fit and cannot independently turn a Fast fallback order
-into Heavy/Critical.
-The finite execution fallback remains preferred role, alternate role, then unassigned/ordinary
-targets, deduplicated by execution identity. If the preferred role pool is empty, all non-judge
-model Steps become the general worker pool and are scored using that role's Advanced profile.
-Legacy `task-route` may reorder this general fallback tail, but it cannot replace the primary that
-Auto selected. Its INFO log marks this as `scope=fallback-only` and includes the protected primary,
-ordered fallbacks, task level/reasons, and conversation cache key. Non-Auto task-aware strategies
-that may choose the primary log `scope=primary-and-fallback`. A Combo containing only a judge-only
-Step has no executable worker target.
+- Input: extracted current request, at most six recent meaningful events, and compact execution
+  metadata.
+- Not included: the client's tool definitions or the entire conversation.
+- Output: one role verdict—**Fast Worker** or **Strong Reasoning**; it never selects a concrete
+  model.
+- Failure behavior: timeout, HTTP error, stale Step, or invalid output falls through to neutral Auto
+  scoring and never blocks the request.
+- Calibration: AI self-confidence is ignored because it is not comparable to local heuristic
+  scores.
+- Cache: successful decisions are reused for one hour, up to 1,000 process-local entries, keyed by
+  Combo, classifier target, request, and bounded-context digest.
 
-The Builder's Advanced section supports independent `fastWorkerWeights` and
-`strongReasoningWeights` profiles. Selection stays inside the preferred eligible role pool when
-that pool is populated:
+A classifier Step is judge-only unless it is also explicitly assigned to a worker role. Judge-only
+Steps cannot become the final responder through scoring, fallback, or affinity.
 
-- one eligible role member is selected directly;
-- two or more role members are ranked with that role's custom profile;
-- an unset role profile inherits the default weights or active Mode Pack;
-- the remaining preferred-role members stay ahead of alternate-role and unassigned fallbacks.
-- when that role has no assigned members, its profile ranks the general worker pool instead.
+### Pool Selection and Fallback
 
-An explicit per-request mode override remains authoritative over persisted role profiles.
+Eligibility comes first. Role membership cannot restore a target excluded by capability, context
+window, quota, connection cooldown, model lockout, or circuit breaker.
+
+| Active decision                     | Primary scoring scope            | Fallback order                                  |
+| :---------------------------------- | :------------------------------- | :---------------------------------------------- |
+| Fast Worker                         | Eligible Fast Worker Steps       | Fast → Strong → General                         |
+| Strong Reasoning                    | Eligible Strong Reasoning Steps  | Strong → Fast → General                         |
+| Role selected but its pool is empty | All non-judge model Steps        | General workers ranked with that role's profile |
+| Neutral                             | Ordinary eligible candidate pool | Normal Auto behavior                            |
+
+For the standard rules router, epsilon exploration stays inside the active role pool. After Auto
+selects the primary, task-aware routing and prompt-cache affinity may reorder only the fallback tail;
+they cannot replace the selected model. Raw history size remains useful for context-window fit but
+cannot independently promote a Fast request to Heavy/Critical.
+
+Task-Route logs the selected model, complete ordered pools, task level, reasons, and conversation
+cache key. Auto routes use `scope=selection-and-fallback`; protected non-adaptive selections may use
+`scope=fallback-only`. A Combo containing only a judge-only Step has no executable worker.
+
+### Advanced Weights Inside a Role
+
+The Builder supports separate `fastWorkerWeights` and `strongReasoningWeights` profiles:
+
+| Eligible members in the active role | Behavior                                              |
+| :---------------------------------- | :---------------------------------------------------- |
+| One                                 | Select it directly                                    |
+| Two or more                         | Rank them with that role's Advanced profile           |
+| Profile unset                       | Inherit the default weights or active Mode Pack       |
+| No assigned members                 | Rank the general worker pool with that role's profile |
+
+Preferred-role members always stay ahead of alternate-role and unassigned fallbacks. An explicit
+per-request mode override remains authoritative over persisted role profiles.
+
+<details>
+<summary><strong>Context and IDE-envelope safeguards</strong></summary>
+
+- Ordinary chat content is used as-is. IDE envelopes such as `<userRequest>` and `<user_request>`
+  are reduced to the last explicit request; environment, workspace, editor, memory, and reminder
+  blocks are ignored.
+- The Context Resolver examines at most two recent user requests from the six-event summary, applies
+  recency decay, and may use a recent meaningful assistant summary if tool events displaced the
+  relevant user turn.
+- Repeated failures support a Strong continuation only when the continuation is already relevant.
+  A new explicit task never inherits an older role.
+- Explicit tool choice on an assistant/tool continuation describes the automation protocol; it does
+  not automatically make the task difficult.
+
+</details>
+
+<details>
+<summary><strong>Execution and isolation guarantees</strong></summary>
+
+- The internal classifier call is non-streaming, skips Context Relay and session-affinity tracking,
+  and still passes through provider authentication, circuit breakers, and request sanitization.
+- Candidate and fallback entries are deduplicated by execution identity.
+- If the preferred pool is empty, legacy task-aware logic may reorder the general fallback tail but
+  cannot replace the primary selected by Auto.
+
+</details>
 
 ## Mode Packs
 
