@@ -1,8 +1,13 @@
-// Integration test for #10452: a server-emitted application-level pong must not
-// keep a half-open client alive. Uses the real server harness from
-// tests/integration/live-ws-startup.test.ts (serial, --test-concurrency=1
-// integration runner — this test needs a ~50s window to cross the server's
-// HEARTBEAT_TIMEOUT_MS, which is intentionally NOT inflated here).
+// Integration test for #10452 and its follow-up: a server-emitted application pong must
+// not keep a half-open client alive (#10452), and a subscriber that never sends anything
+// at the application level must not be evicted either. The server now also sends a
+// protocol-level ping (RFC 6455 §5.5.2) that conformant clients auto-answer, which
+// separates a client that stopped reading frames (simulated below by pausing the
+// underlying socket) from one that is alive but silent at the application level.
+//
+// Uses the real server harness from tests/integration/live-ws-startup.test.ts (serial,
+// --test-concurrency=1 integration runner — needs a ~50s window to cross the server's
+// HEARTBEAT_TIMEOUT_MS, intentionally NOT inflated here).
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import net from "node:net";
@@ -71,7 +76,7 @@ function waitForStartup(
 }
 
 test(
-  "LiveWS removes a silent socket but keeps one answering protocol heartbeats (#10452)",
+  "LiveWS reaps a socket that stops reading frames, but keeps a quiet-but-alive subscriber",
   // A fresh DATA_DIR can spend up to the server-startup allowance running the
   // complete migration set before the 50s heartbeat observation window.
   { timeout: 95_000 },
@@ -108,19 +113,22 @@ test(
     try {
       await waitForStartup(child, () => output);
 
-      const connect = (answerHeartbeat: boolean) => {
+      type ConnectMode = "appHeartbeat" | "quiet" | "deadSocket";
+
+      const connect = (mode: ConnectMode) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/live-ws`, {
           headers: { Authorization: `Bearer ${apiKey}`, Origin: origin },
         });
         let heartbeat: NodeJS.Timeout | undefined;
-        const welcome = new Promise<void>((resolve, reject) => {
+        let sessionId: string | undefined;
+        const welcome = new Promise<string>((resolve, reject) => {
           const timeout = setTimeout(() => {
             reject(new Error(`Timed out waiting for welcome. Output:\n${output}`));
           }, 5_000);
 
           ws.once("open", () => {
             ws.send(JSON.stringify({ type: "subscribe", channels: ["requests"] }));
-            if (answerHeartbeat) {
+            if (mode === "appHeartbeat") {
               heartbeat = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({ type: "ping" }));
@@ -130,9 +138,17 @@ test(
           });
 
           ws.on("message", (data) => {
-            if (JSON.parse(data.toString()).type === "welcome") {
+            const message = JSON.parse(data.toString());
+            if (message.type === "welcome") {
               clearTimeout(timeout);
-              resolve();
+              sessionId = message.sessionId;
+              // "deadSocket": pause the underlying TCP socket so the `ws` receiver never
+              // sees (and auto-answers) the server's ping. It also cannot observe its own
+              // closure, so the assertion checks the server's disconnect log instead.
+              if (mode === "deadSocket") {
+                (ws as unknown as { _socket: import("net").Socket })._socket.pause();
+              }
+              resolve(sessionId as string);
             }
           });
 
@@ -145,30 +161,41 @@ test(
         return { ws, welcome, stop: () => clearInterval(heartbeat) };
       };
 
-      const silent = connect(false);
-      const responsive = connect(true);
-      await Promise.all([silent.welcome, responsive.welcome]);
+      const deadSocket = connect("deadSocket");
+      const quiet = connect("quiet");
+      const appHeartbeat = connect("appHeartbeat");
+      const [deadSocketId] = await Promise.all([
+        deadSocket.welcome,
+        quiet.welcome,
+        appHeartbeat.welcome,
+      ]);
 
       // Wait past HEARTBEAT_TIMEOUT_MS (35s) plus one heartbeat interval (15s).
-      // The server emits application-level pong frames during this period, but
-      // only the responsive client sends the inbound { type: "ping" } signal.
       await new Promise((resolve) => setTimeout(resolve, 50_000));
 
-      assert.equal(
-        silent.ws.readyState,
-        WebSocket.CLOSED,
-        `Silent socket remained alive after timeout — server pong renewed lastActivity. Output:\n${output}`
+      assert.ok(
+        output.includes(`Client disconnected: ${deadSocketId}`),
+        `Server never disconnected the socket that stopped reading frames — protocol ` +
+          `ping/pong must not mask a truly half-open connection (#10452). Output:\n${output}`
       );
       assert.notEqual(
-        responsive.ws.readyState,
+        quiet.ws.readyState,
         WebSocket.CLOSED,
-        `Protocol-heartbeat client was terminated. Output:\n${output}`
+        `A real subscriber that sent no application-level messages was evicted — the protocol ` +
+          `ping/pong (auto-answered by every conformant client) must keep it alive. Output:\n${output}`
+      );
+      assert.notEqual(
+        appHeartbeat.ws.readyState,
+        WebSocket.CLOSED,
+        `Application-heartbeat client was terminated. Output:\n${output}`
       );
 
-      silent.stop();
-      responsive.stop();
-      silent.ws.close();
-      responsive.ws.close();
+      deadSocket.stop();
+      quiet.stop();
+      appHeartbeat.stop();
+      quiet.ws.close();
+      appHeartbeat.ws.close();
+      deadSocket.ws.terminate();
     } finally {
       terminateTree(child);
     }

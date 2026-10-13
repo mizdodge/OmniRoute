@@ -1,1 +1,0 @@
-- **fix(usage):** read Gemini `usageMetadata` out of the antigravity `{ response: {...} }` envelope so non-streaming requests log real token usage instead of `IN 0 | OUT 0` (port of decolua/9router#59d858b) ([#10430](https://github.com/diegosouzapw/OmniRoute/pull/10430)) — thanks @rqzbeh

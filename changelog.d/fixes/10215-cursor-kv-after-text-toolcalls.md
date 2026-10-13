@@ -1,1 +1,0 @@
-- **fix(cursor):** Stop truncating pending tool calls on non-composer models when a KV checkpoint arrives after text but before the `exec_mcp` frame — the KV short-circuit is now gated to the composer family where it was verified ([#10215](https://github.com/diegosouzapw/OmniRoute/issues/10215)).

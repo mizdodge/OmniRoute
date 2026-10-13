@@ -1,1 +1,0 @@
-- **feat(api):** add `GET`/`POST` `/v1/multimodal-embeddings` as an alias of `/v1/embeddings` so Jina-compatible clients do not receive HTTP 404 `unknown_route` — thanks @RaviTharuma

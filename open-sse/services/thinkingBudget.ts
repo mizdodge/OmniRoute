@@ -36,6 +36,10 @@ import {
   getResolvedModelCapabilities,
   supportsReasoning,
 } from "@/lib/modelCapabilities";
+import {
+  jsonLengthStrippingBase64DataUris,
+  rawLengthStrippingBase64DataUris,
+} from "../utils/jsonSize.ts";
 
 // Effort → budget token mapping
 export const EFFORT_BUDGETS: Record<string, number> = {
@@ -57,6 +61,61 @@ export const THINKING_LEVEL_MAP: Record<string, number> = {
   max: 131072, // T11: max = full Claude budget (sub2api: xhigh)
   xhigh: 131072, // T11: explicit xhigh alias
 };
+
+export type Gemini38ThinkingLevel = "low" | "medium" | "high";
+
+/** Gemini 3.8 Flash (and prefixed ids like agy/gemini-3.8-flash-high). */
+export function isGemini38Model(model: string): boolean {
+  return /(?:^|[\/])gemini-3\.8(?:$|-)/i.test(model);
+}
+
+export function gemini38ThinkingLevelFromBudget(
+  model: string,
+  budget: number
+): Gemini38ThinkingLevel {
+  const resolved = getResolvedModelCapabilities(model);
+  const cap = resolved.thinkingBudgetCap ?? 24576;
+  const medium = resolved.defaultThinkingBudget || 8192;
+  if (budget <= 0) {
+    throw new RangeError(
+      "gemini38ThinkingLevelFromBudget: budget must be > 0; use gemini38ThinkingConfig for the off-switch"
+    );
+  }
+  if (budget >= cap) return "high";
+  if (budget <= 1024) return "low";
+  if (budget <= medium) return "medium";
+  return "high";
+}
+
+function clientAskedForThoughts(body: Record<string, unknown>): boolean {
+  return body.includeThoughts === true || body.include_thoughts === true;
+}
+
+/**
+ * Gemini 3.8 honors thinkingLevel, not a 3.7 numeric thinkingBudget.
+ * Omit includeThoughts unless the client asked - thoughts share maxOutputTokens.
+ */
+export function gemini38ThinkingConfig(
+  model: string,
+  budget: number,
+  body: Record<string, unknown>
+):
+  | { thinkingLevel: Gemini38ThinkingLevel; includeThoughts?: boolean }
+  | { thinkingBudget: number; includeThoughts: boolean } {
+  if (budget <= 0) {
+    return { thinkingBudget: 0, includeThoughts: false };
+  }
+  const thinkingConfig: {
+    thinkingLevel: Gemini38ThinkingLevel;
+    includeThoughts?: boolean;
+  } = {
+    thinkingLevel: gemini38ThinkingLevelFromBudget(model, budget),
+  };
+  if (clientAskedForThoughts(body)) {
+    thinkingConfig.includeThoughts = true;
+  }
+  return thinkingConfig;
+}
 
 // Default config (passthrough = backward compatible)
 export const DEFAULT_THINKING_CONFIG = {
@@ -350,7 +409,8 @@ function applyAdaptiveBudget(body: unknown, cfg: Partial<ThinkingBudgetConfig>) 
   const tools = Array.isArray(bodyRecord.tools) ? bodyRecord.tools : [];
   const toolCount = tools.length;
 
-  // Get last user message length
+  // Get last user message length. Strip base64 data URIs so an inline image in the prompt
+  // doesn't inflate lastMsgLength and silently bump the complexity multiplier.
   let lastMsgLength = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -358,8 +418,8 @@ function applyAdaptiveBudget(body: unknown, cfg: Partial<ThinkingBudgetConfig>) 
     if (msgRecord.role === "user") {
       lastMsgLength =
         typeof msgRecord.content === "string"
-          ? msgRecord.content.length
-          : JSON.stringify(msgRecord.content || "").length;
+          ? rawLengthStrippingBase64DataUris(msgRecord.content)
+          : jsonLengthStrippingBase64DataUris(msgRecord.content || "");
       break;
     }
   }

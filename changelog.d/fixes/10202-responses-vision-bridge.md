@@ -1,1 +1,0 @@
-- **fix(guardrails):** Vision Bridge handles OpenAI Responses `input`/`input_image` requests before combo vision filtering ([#10202](https://github.com/diegosouzapw/OmniRoute/pull/10202)) — thanks @Zartharas

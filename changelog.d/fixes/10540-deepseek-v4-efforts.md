@@ -1,1 +1,0 @@
-- **fix(deepseek):** Advertise `none`, `low`, `high`, and `max` for V4 Pro and Flash, derive OpenCode Go effort aliases from base-model metadata, and route those models through native Responses ([#10540](https://github.com/diegosouzapw/OmniRoute/pull/10540)) — thanks @jackjinke

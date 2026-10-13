@@ -1,1 +1,0 @@
-- **fix(providers):** register live OpenRouter Gemini Embedding 2 ids (`google/gemini-embedding-2` and `google/gemini-embedding-2-preview`, 3072-d) in the curated embeddings catalog so `GET /v1/models` and `GET /v1/embeddings` list the ids that already serve — thanks @RaviTharuma

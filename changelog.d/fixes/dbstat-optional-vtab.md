@@ -1,1 +1,0 @@
-- **fix(db):** database settings API no longer returns HTTP 500 on SQLite builds compiled without the optional `dbstat` virtual table (sql.js/WASM); per-table sizes degrade to 0 instead of failing the whole stats call

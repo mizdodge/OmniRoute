@@ -25,6 +25,7 @@ lastUpdated: 2026-08-19
 | `auto/offline` | offline | Favors providers with highest quota availability                         |
 | `auto/smart`   | smart   | Quality-first + higher exploration rate (10%) for better model discovery |
 | `auto/lkgp`    | lkgp    | Explicit LKGP (same as default `auto`)                                   |
+| `auto/chaos`   | chaos   | Parallel fan-out, one model per provider (not fault injection)           |
 
 ### Category × Tier Composition (`auto/<category>:<tier>`)
 
@@ -159,14 +160,36 @@ enumerating every existing combo that shadows a model id, so operators who
 hit this by accident (rather than intentionally, per #6940) have a signal.
 The detection helper lives in `src/lib/combos/modelNameCollision.ts`.
 
+## Calling a Custom Combo From a Client
+
+Persisted combos (Settings → Combos) are only used when the client sends the combo's **exact name** in the `model` field — there is no fuzzy or partial matching of the combo name, and no `auto/` prefix involved. Resolution order (`getComboForModel()` in `src/sse/services/model.ts`):
+
+1. exact combo-name match (`model: "my-combo"`),
+2. `combo/<name>` prefix (`model: "combo/my-combo"`),
+3. model→combo glob mappings (`/api/model-combo-mappings`).
+
+```bash
+curl -X POST http://localhost:20128/v1/chat/completions \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"my-combo","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Two common pitfalls:
+
+- **`auto` does not use your combos.** `auto`/`auto/*` builds its own zero-config candidate pool and only consults persisted combos if a combo is literally named `auto` (not recommended). To route through a combo, send its exact name — not `auto`.
+- **`openrouter/auto` is a real paid OpenRouter product** ("Auto Best Available"), not an OmniRoute alias. It is the single static model entry of the OpenRouter registry (`open-sse/config/providers/registry/openrouter/index.ts`) and is billed separately. Use Settings → Routing → Hide paid models to exclude it from `auto` pools.
+
+See [#7992](https://github.com/diegosouzapw/OmniRoute/issues/7992) and [#7111](https://github.com/diegosouzapw/OmniRoute/issues/7111) for the original confusion this documents.
+
 ## How It Works (Persisted Auto-Combos)
 
-The Auto-Combo Engine dynamically selects the best provider/model for each request using **14
+The Auto-Combo Engine dynamically selects the best provider/model for each request using **16
 baseline factors plus 2 optional adaptive-role factors** (defined in
 `open-sse/services/autoCombo/scoring.ts` → `DEFAULT_WEIGHTS`). Weights form a normalized
 distribution (custom weights are renormalized by `normalizeScoringWeights()`).
 
-![Auto-Combo 14-factor scoring](../diagrams/exported/auto-combo-12factor.svg)
+![Auto-Combo 16-factor scoring](../diagrams/exported/auto-combo-scoring.svg)
 
 > Source: [diagrams/auto-combo-12factor.mmd](../diagrams/auto-combo-12factor.mmd) (regenerate via `npm run docs:render-diagrams`). The filename predates the current factor set; the diagram covers the baseline scoring flow but not every current factor.
 
@@ -193,23 +216,19 @@ distribution (custom weights are renormalized by `normalizeScoringWeights()`).
 role, `activateAdaptiveRoleWeight()` scales the baseline distribution and reserves 0.12–0.20 for
 that role, keeping the final distribution normalized.
 
+**Sum:** `0.1429 + 0.1605 + 0.1429 + 0.1143 + 0.0762 + (7 × 0.0476) + 0.00 + 0.00 + 0.03 + 0.00 = 1.0` as declared in `DEFAULT_WEIGHTS`; user-configured weights are renormalized into a distribution by `normalizeScoringWeights()` before scoring.
+
 ## Adaptive Model Roles
-
 Adaptive routing answers two questions in order:
-
 1. **Which worker role fits this request?** Fast Worker or Strong Reasoning.
 2. **Which concrete model should execute it?** Auto scoring ranks only the eligible models in that
    role first.
-
 > **In one sentence:** local detectors handle clear requests for free; bounded context resolves
 > follow-ups; the optional AI Intent Classifier is the last resort; Task-Route then exposes the
 > selected model and ordered fallback pools.
-
 ### Minimal Configuration
-
 Persisted `auto` Combos assign stable model Step IDs to two optional role pools. One additional
 Step may act as the AI Intent Classifier:
-
 ```json
 {
   "name": "adaptive-production",
@@ -226,9 +245,7 @@ Step may act as the AI Intent Classifier:
   }
 }
 ```
-
 ### Decision Map
-
 ```text
 Current user request
   ↓
@@ -250,12 +267,9 @@ Auto scoring selects one model inside the active pool
   ↓
 Task-Route publishes the selected model and ordered fallback pools
 ```
-
 ### What Runs Locally?
-
 Every stage below is synchronous and performs no model call. Evidence is compositional: a task can
 be casual in tone, about source code, repository-wide, and complex at the same time.
-
 | Stage                        | What it extracts                                                    | Examples of recognized evidence                                                                        |
 | :--------------------------- | :------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------- |
 | **Language Detector**        | Primary language, mixed-language flag, support status, confidence   | English, Brazilian Portuguese, Spanish, Indonesian, Chinese, Japanese, Russian, German, Korean, Arabic |
@@ -264,15 +278,12 @@ be casual in tone, about source code, repository-wide, and complex at the same t
 | **Casual Detector**          | Clear conversation versus a context-dependent fragment              | Greetings, thanks, laughter, coffee/chat invitations; `masa sih` remains contextual                    |
 | **Contextual Detector**      | Whether the request transforms, continues, or clarifies recent work | “show it in Mermaid”, “continue”, “make that shorter”                                                  |
 | **Adaptive Deterministic**   | Independent Fast and Strong evidence plus the winning margin        | Routine bounded edit → Fast; cross-system debugging → Strong                                           |
-
 The legacy multilingual classifier remains backward-compatible evidence for simple, code, math,
 reasoning, tool, and automation signals. Task-specific evidence wins over casual tone, so
 `bro debug race condition ini` remains engineering work. A complex Request Profile may upgrade a
 routine-looking task, but a simple domain label cannot cancel specific debugging, migration,
 architecture, or security evidence.
-
 ### Examples
-
 | Request                                               | Local interpretation                    | Result                        | AI call?                         |
 | :---------------------------------------------------- | :-------------------------------------- | :---------------------------- | :------------------------------- |
 | `update this UI theme to lime`                        | UI change, bounded, routine             | **Fast Worker**               | No                               |
@@ -281,17 +292,13 @@ architecture, or security evidence.
 | `audit this authentication design for security flaws` | Security review, high-risk analysis     | **Strong Reasoning**          | No                               |
 | `could you explain it in Mermaid?`                    | Context-dependent format transformation | Inherit recent role           | Only if local context is missing |
 | Unsupported language or a true Fast/Strong conflict   | Deterministic evidence remains neutral  | AI classifier or neutral Auto | If configured                    |
-
 Repository scope recognizes wording such as `whole project`, `entire solution`, `complete
 codebase`, and Indonesian equivalents. Input length is measured from the extracted current request:
 at least 2,000 estimated current-request tokens add Strong evidence, while accumulated conversation
 length and advertised tool count do not.
-
 ### AI Intent Classifier: Last Resort, Not the Main Router
-
 Set `adaptiveJudgeModelRef` to one model Step from the same Combo. The classifier runs only when
 deterministic evidence and bounded context cannot choose a role.
-
 - Input: extracted current request, at most six recent meaningful events, and compact execution
   metadata.
 - Not included: the client's tool definitions or the entire conversation.
@@ -303,48 +310,36 @@ deterministic evidence and bounded context cannot choose a role.
   scores.
 - Cache: successful decisions are reused for one hour, up to 1,000 process-local entries, keyed by
   Combo, classifier target, request, and bounded-context digest.
-
 A classifier Step is judge-only unless it is also explicitly assigned to a worker role. Judge-only
 Steps cannot become the final responder through scoring, fallback, or affinity.
-
 ### Pool Selection and Fallback
-
 Eligibility comes first. Role membership cannot restore a target excluded by capability, context
 window, quota, connection cooldown, model lockout, or circuit breaker.
-
 | Active decision                     | Primary scoring scope            | Fallback order                                  |
 | :---------------------------------- | :------------------------------- | :---------------------------------------------- |
 | Fast Worker                         | Eligible Fast Worker Steps       | Fast → Strong → General                         |
 | Strong Reasoning                    | Eligible Strong Reasoning Steps  | Strong → Fast → General                         |
 | Role selected but its pool is empty | All non-judge model Steps        | General workers ranked with that role's profile |
 | Neutral                             | Ordinary eligible candidate pool | Normal Auto behavior                            |
-
 For the standard rules router, epsilon exploration stays inside the active role pool. After Auto
 selects the primary, task-aware routing and prompt-cache affinity may reorder only the fallback tail;
 they cannot replace the selected model. Raw history size remains useful for context-window fit but
 cannot independently promote a Fast request to Heavy/Critical.
-
 Task-Route logs the selected model, complete ordered pools, task level, reasons, and conversation
 cache key. Auto routes use `scope=selection-and-fallback`; protected non-adaptive selections may use
 `scope=fallback-only`. A Combo containing only a judge-only Step has no executable worker.
-
 ### Advanced Weights Inside a Role
-
 The Builder supports separate `fastWorkerWeights` and `strongReasoningWeights` profiles:
-
 | Eligible members in the active role | Behavior                                              |
 | :---------------------------------- | :---------------------------------------------------- |
 | One                                 | Select it directly                                    |
 | Two or more                         | Rank them with that role's Advanced profile           |
 | Profile unset                       | Inherit the default weights or active Mode Pack       |
 | No assigned members                 | Rank the general worker pool with that role's profile |
-
 Preferred-role members always stay ahead of alternate-role and unassigned fallbacks. An explicit
 per-request mode override remains authoritative over persisted role profiles.
-
 <details>
 <summary><strong>Context and IDE-envelope safeguards</strong></summary>
-
 - Ordinary chat content is used as-is. IDE envelopes such as `<userRequest>` and `<user_request>`
   are reduced to the last explicit request; environment, workspace, editor, memory, and reminder
   blocks are ignored.
@@ -355,42 +350,48 @@ per-request mode override remains authoritative over persisted role profiles.
   A new explicit task never inherits an older role.
 - Explicit tool choice on an assistant/tool continuation describes the automation protocol; it does
   not automatically make the task difficult.
-
 </details>
-
 <details>
 <summary><strong>Execution and isolation guarantees</strong></summary>
-
 - The internal classifier call is non-streaming, skips Context Relay and session-affinity tracking,
   and still passes through provider authentication, circuit breakers, and request sanitization.
 - Candidate and fallback entries are deduplicated by execution identity.
 - If the preferred pool is empty, legacy task-aware logic may reorder the general fallback tail but
   cannot replace the primary selected by Auto.
-
 </details>
-
 ## Mode Packs
 
-Four pre-defined weight profiles in `open-sse/services/autoCombo/modePacks.ts`. Each pack overrides the default weights to bias selection toward a specific goal. Below are the **full weight tables per pack** (each row sums to 1.0).
+6 pre-defined weight profiles in `open-sse/services/autoCombo/modePacks.ts`. Each pack replaces the default weights outright to bias selection toward one goal. Every pack already sums to `1.0` (`0.9999` as printed at four decimals), so `normalizeScoringWeights()` has nothing meaningful to correct when a pack is active — the values below are, to rounding, the ones the scorer applies.
 
-| Factor       | ship-fast | cost-saver | quality-first | offline-friendly |
-| :----------- | :-------- | :--------- | :------------ | :--------------- |
-| quota        | 0.14      | 0.14       | 0.10          | **0.37**         |
-| health       | 0.28      | 0.19       | 0.18          | 0.28             |
-| costInv      | 0.05      | **0.37**   | 0.05          | 0.10             |
-| latencyInv   | **0.32**  | 0.05       | 0.05          | 0.05             |
-| taskFit      | 0.10      | 0.10       | **0.37**      | 0.00             |
-| stability    | 0.00      | 0.05       | 0.15          | 0.10             |
-| tierPriority | 0.05      | 0.05       | 0.05          | 0.05             |
+| Factor                | ship-fast  | cost-saver | quality-first | offline-friendly | reliability-first | chaos-mode |
+| :-------------------- | :--------- | :--------- | :------------ | :--------------- | :---------------- | :--------- |
+| `quota`               | 0.1133     | 0.1133     | 0.0752        | **0.3324**       | 0.1133            | 0.0376     |
+| `health`              | 0.2667     | 0.1810     | 0.1714        | 0.2667           | **0.3524**        | **0.4000** |
+| `costInv`             | 0.0276     | **0.3324** | 0.0276        | 0.0752           | 0.0181            | 0.0140     |
+| `latencyInv`          | **0.3048** | 0.0476     | 0.0476        | 0.0476           | 0.0476            | 0.0186     |
+| `taskFit`             | 0.0952     | 0.0952     | **0.3524**    | 0.0000           | 0.0952            | 0.1905     |
+| `stability`           | 0.0000     | 0.0476     | 0.1429        | 0.0952           | 0.1905            | 0.1714     |
+| `tierPriority`        | 0.0376     | 0.0376     | 0.0276        | 0.0376           | 0.0276            | 0.0040     |
+| `tierAffinity`        | 0.0000     | 0.0000     | 0.0000        | 0.0000           | 0.0000            | 0.0000     |
+| `specificityMatch`    | 0.0000     | 0.0000     | 0.0000        | 0.0000           | 0.0000            | 0.0000     |
+| `contextAffinity`     | 0.0095     | 0.0000     | 0.0000        | 0.0000           | 0.0000            | 0.0186     |
+| `sessionAvailability` | 0.0476     | 0.0476     | 0.0476        | 0.0476           | 0.0476            | 0.0476     |
+| `resetWindowAffinity` | 0.0000     | 0.0000     | 0.0000        | 0.0000           | 0.0000            | 0.0000     |
+| `connectionDensity`   | 0.0476     | 0.0476     | 0.0476        | 0.0476           | 0.0476            | 0.0476     |
+| `quality`             | 0.02       | 0.02       | **0.03**      | 0.02             | 0.02              | 0.02       |
+| `reliability`         | 0.03       | 0.03       | 0.03          | 0.03             | **0.04**          | 0.03       |
 
 Notes:
 
-- `tierAffinity` and `specificityMatch` are not set in mode packs — `calculateScore()` treats them as `?? 0` when absent.
+- **Packs carry `quality` and `reliability`** (`quality 0.02`, `quality-first 0.03`; `reliability 0.03`, `reliability-first 0.04`) and replace the weight map wholesale (`weights = pack`, not a merge). `DEFAULT_WEIGHTS` carries `quality 0.03 / reliability 0`; selecting `balanced`/`default` keeps those defaults, selecting a pack uses the pack's values above. On a cold pool (no observations yet, so `quality 0.5` and `reliability 1`) these two factors add `+0.04` under a generic pack (`0.03 + 0.01`), `+0.045` under `quality-first` and `+0.05` under `reliability-first`.
+- `tierAffinity`, `specificityMatch` and `resetWindowAffinity` are explicitly `0` in every pack.
 - Each pack's emphasis at a glance:
-  - **ship-fast** → latencyInv 0.32 + health 0.28 (low-latency, healthy connections)
-  - **cost-saver** → costInv 0.37 (cheapest tokens win)
-  - **quality-first** → taskFit 0.37 + stability 0.15 (best model for the task, consistent)
-  - **offline-friendly** → quota 0.37 + health 0.28 (max headroom regardless of speed/cost)
+  - **ship-fast** → latencyInv 0.3048 + health 0.2667 (low-latency, healthy connections)
+  - **cost-saver** → costInv 0.3324 (cheapest tokens win)
+  - **quality-first** → taskFit 0.3524 + stability 0.1429 + quality 0.03, the highest of any pack (best model for the task, consistent)
+  - **offline-friendly** → quota 0.3324 + health 0.2667 (max headroom regardless of speed/cost)
+  - **reliability-first** → health 0.3524 + stability 0.1905 + reliability 0.04, the highest of any pack (fewest surprises)
+  - **chaos-mode** → health 0.4000 + taskFit 0.1905 (the weight pack `auto/chaos` assigns to its panel members; the parallel fan-out does not read these weights, and this is not a fault-injection profile, see [CHAOS-MODE.md](../guides/CHAOS-MODE.md#autochaos-parallel-fan-out))
 
 ### Per-Request Controls (headers) — #6023 / #6024 / #6025 / #3470
 
@@ -399,11 +400,12 @@ combo's stored config. These apply only to the `auto` strategy and only for the 
 that carries them; the combo's saved `modePack`/`budgetCap`/`budgetFallback` are used
 when the header is absent.
 
-| Header                        | Accepts                                                                                                                                                                                 | Effect                                                                                                                                                                                                                                               |
-| :---------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `X-OmniRoute-Mode`            | a preset alias (`fast`, `balanced`, `quality`, `cheap`, `reliable`, `offline`) or a raw pack name (`ship-fast`, `cost-saver`, `quality-first`, `offline-friendly`, `reliability-first`) | Overrides the scoring weights for this request. `balanced`/`default` force the default weights (no pack). Unknown values are ignored (config preserved).                                                                                             |
-| `X-OmniRoute-Budget`          | a positive number (max USD per request)                                                                                                                                                 | Hard cost ceiling: candidates whose estimated cost exceeds it are filtered before selection. What happens when **every** candidate exceeds it is controlled by `X-OmniRoute-Budget-Fallback` below.                                                  |
-| `X-OmniRoute-Budget-Fallback` | `cheapest` (default, aliases: `cheapest-viable`, `soft`) or `strict` (aliases: `block`, `hard`)                                                                                         | `cheapest`: falls back to the globally cheapest candidate even though it still exceeds the cap (legacy behavior). `strict`: refuses to select — the request fails fast with `HTTP 402` instead of silently overspending. Unknown values are ignored. |
+| Header                        | Accepts                                                                                                                                                                                 | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| :---------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `X-OmniRoute-Mode`            | a preset alias (`fast`, `balanced`, `quality`, `cheap`, `reliable`, `offline`) or a raw pack name (`ship-fast`, `cost-saver`, `quality-first`, `offline-friendly`, `reliability-first`) | Overrides the scoring weights for this request. `balanced`/`default` force the default weights (no pack). Unknown values are ignored (config preserved).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `X-OmniRoute-Budget`          | a positive number (max USD per request)                                                                                                                                                 | Hard cost ceiling: candidates whose estimated cost exceeds it are filtered before selection. What happens when **every** candidate exceeds it is controlled by `X-OmniRoute-Budget-Fallback` below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `X-OmniRoute-Budget-Fallback` | `cheapest` (default, aliases: `cheapest-viable`, `soft`) or `strict` (aliases: `block`, `hard`)                                                                                         | `cheapest`: falls back to the globally cheapest candidate even though it still exceeds the cap (legacy behavior). `strict`: refuses to select — the request fails fast with `HTTP 402` instead of silently overspending. Unknown values are ignored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `X-OmniRoute-Effort`          | `auto` (other values reserved)                                                                                                                                                          | Adaptive thinking budget: when the request carries **no** reasoning field of any shape (`reasoning_effort`, `reasoning`, `thinking`), the gateway resolves `auto` to `low`/`medium`/`high` from deterministic request-shape signals (last-user-message length, context size up to the last user message, prior tool results, tool-loop depth). Signals are scoped to the current turn — everything after the last user message is ignored — so every request in a tool loop resolves to the same level (stateless per-turn pin, no session state, no mid-loop escalation that would break upstream prompt-cache prefixes). An explicit client reasoning field always wins. Scoped to requests whose upstream dispatch resolves to the OpenAI Chat Completions shape (`targetFormat === FORMATS.OPENAI`) — `reasoning_effort` is an OpenAI-shaped field, so the header is a no-op on a Claude- or Gemini-targeted request (see `open-sse/handlers/chatCore/adaptiveEffortWiring.ts`). |
 
 ```bash
 # Force the fastest profile, cap this request at $0.05, and hard-block instead of overspending
@@ -422,13 +424,13 @@ resolved values feed the engine's existing `config.modePack` / `config.budgetCap
 
 ## All Routing Strategies
 
-OmniRoute's combo engine supports **19 routing strategies** (declared in `src/shared/constants/routingStrategies.ts` → `ROUTING_STRATEGY_VALUES`). The Auto Combo engine itself is exposed under the `auto` strategy; the others are available for persisted combos.
+OmniRoute's combo engine supports **20 routing strategies** (declared in `src/shared/constants/routingStrategies.ts` → `ROUTING_STRATEGY_VALUES`). The Auto Combo engine itself is exposed under the `auto` strategy; the others are available for persisted combos.
 
 | Strategy            | Description                                                                                                                                                                               |
 | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `priority`          | First-target ordered list with explicit priority                                                                                                                                          |
 | `weighted`          | Weighted random by per-target weight                                                                                                                                                      |
-| `round-robin`       | Cycle through targets in order                                                                                                                                                            |
+| `round-robin`       | Cycle through targets in order (batched; see below)                                                                                                                                       |
 | `context-relay`     | Hand off context across targets (long conversations)                                                                                                                                      |
 | `fill-first`        | Fill each target's quota before moving to next                                                                                                                                            |
 | `p2c`               | Power-of-2-choices random load balancing                                                                                                                                                  |
@@ -438,15 +440,92 @@ OmniRoute's combo engine supports **19 routing strategies** (declared in `src/sh
 | `reset-aware` ⭐    | Prioritize by quota reset time — short reset windows ranked higher                                                                                                                        |
 | `reset-window`      | Prefer targets whose quota window resets soonest                                                                                                                                          |
 | `headroom`          | Pick the target with the most remaining quota headroom                                                                                                                                    |
+| `quota-weighted`    | Skip exhausted accounts, then pick among the rest in proportion to leftover quota divided by in-flight load; existing conversations stay pinned                                           |
 | `strict-random`     | Random without deduplication of repeats                                                                                                                                                   |
-| `auto`              | Use Auto Combo scoring (9-factor) — **recommended**                                                                                                                                       |
-| `lkgp`              | Last-Known-Good Path (sticky route to last successful target)                                                                                                                             |
+| `auto`              | Use Auto Combo scoring (16-factor) — **recommended**                                                                                                                                      |
+| `lkgp`              | Last-Known-Good Path (pins to the last successful provider, then falls back to rules)                                                                                                     |
 | `context-optimized` | Pick target with best fit for current context size                                                                                                                                        |
 | `cache-optimized`   | Reorder targets by prompt-cache affinity — the connection likeliest to already hold this request's cached prefix is tried first (`open-sse/services/combo/promptCacheAffinity.ts`, #8008) |
 | `fusion` 🧬         | Fan out to a panel of models in parallel, then synthesize one answer via a judge (see below)                                                                                              |
 | `pipeline`          | Run targets sequentially, threading each step's output into the next step's input; only the final answer is returned (#6396)                                                              |
 
 ⭐ = New in v3.8.0 · 🧬 = New in v3.8.36
+
+### `weighted` semantics
+
+`weighted` is a **proportional random draw per request**
+(`open-sse/services/combo/targetSorters.ts` → `selectWeightedTarget`), not an equalizer:
+
+- Each request draws **one** step with probability `weight / totalWeight`; the remaining steps
+  are ordered by descending weight as the fallback chain for that request.
+- A step whose weight is `0` (or missing) is **never drawn** while any other step has a
+  weight > 0 — it can only serve as a fallback after the drawn step fails. Only when **all**
+  weights are 0 does selection become uniform.
+- Steps whose targets are all unavailable — provider circuit breaker `OPEN`, connection
+  cooldown, model lockout — are removed from the draw before it happens
+  (`open-sse/services/combo/targetResolution.ts`), so a single healthy step can temporarily
+  win every request.
+- `stickyWeightedLimit` (combo config, default `1` = off) pins the drawn step for that many
+  consecutive successes before re-drawing.
+
+For strict rotation use `round-robin`; equal weights on `weighted` give statistical — not
+strict — balance.
+
+### Agentic pipeline mode
+
+A `pipeline` combo with at least two models can opt into planner/executor routing with
+`config.agenticOrchestration.enabled`. The first target owns planning and final answers;
+the second target emits client-native tool calls. OmniRoute detects tool-result
+continuations from the request protocol, asks the planner whether another tool round is
+needed, and dynamically makes either the executor or planner the client-facing final
+step.
+
+Additional models after the second target are ordered executor backups. A failed
+HTTP response or transport exception advances to the next executor, carrying the
+same planner decision and native tools but that executor's own step prompt and
+resolved connection. The first successful response is returned unchanged, including
+SSE streaming; failures after a successful stream starts cannot be retried here.
+If all executors fail, the last failure is returned. Client aborts stop dispatch.
+
+```json
+{
+  "strategy": "pipeline",
+  "models": [{ "model": "provider/planner" }, { "model": "provider/executor" }],
+  "config": {
+    "agenticOrchestration": { "enabled": true, "maxToolRounds": 8 }
+  }
+}
+```
+
+The executor may emit multiple independent calls in one response. Dependent calls are
+handled in later client tool-result turns, with the planner reviewing every result.
+`maxToolRounds` defaults to `8` and accepts `1`–`32`; once reached, the planner must
+produce the best available final answer. Internal planner decisions are buffered, while
+the selected client-facing response preserves the original streaming preference.
+
+### `round-robin` sticky batch and account expansion
+
+Round-robin is batched, not one-request-per-step:
+
+- `stickyRoundRobinLimit` (combo config, then `comboStickyRoundRobinLimit`, then
+  `settings.stickyRoundRobinLimit`, default **3**) keeps the same target for that many
+  consecutive successes before rotating. Set the combo override to `1` for one-request
+  rotation. The combo editor shows the effective value and which layer it came from.
+- `connectionAwareExpansion` (combo config, then settings, default **false**) expands
+  each provider-level step into per-account targets before rotation. Group-B strategies
+  (priority, weighted, round-robin, random, p2c, least-used, cost-optimized, lkgp,
+  fill-first, strict-random, context-optimized, cache-optimized, context-relay, fusion,
+  pipeline) keep a provider-level view until this is on. The combo editor exposes
+  inherit / on / off; inherit uses the global default (off).
+- Prompt-cache locality routing (`promptCacheAffinityEnabled`, default **true**) reorders
+  pinned connections so matching cache keys stay on one account. It takes precedence over
+  round-robin and weighted rotation across pinned per-account steps. Turn it off under
+  Settings → Combo defaults if you need strict rotation. There is no per-combo override.
+
+For multi-account rotation on one model, prefer **one dynamic-account step** (empty
+`connectionId`, whole pool) with sticky limit `1`, not three pinned `connectionId`s.
+Pinned steps plus affinity collapse onto the same account even while the RR counter
+advances.
 
 ## Fusion Strategy
 
@@ -528,7 +607,7 @@ The Auto Combo engine doesn't require pre-defined combos. Instead, `open-sse/ser
 3. Cross-references with `getProviderRegistry()` for model availability + pricing
 4. For each tuple `(provider, model, connection)`, builds a `VirtualAutoComboCandidate`
 5. Picks `connection.defaultModel` (or the registry's first model) as the dispatch target
-6. Scores each candidate using the 9-factor `scorePool()` and the variant's weight pack
+6. Scores each candidate using the 16-factor `scorePool()` and the variant's weight pack
 7. Returns the resulting in-memory `AutoComboConfig` for `handleComboChat()` — never persisted to DB
 
 This means **adding a new provider with `auto/*` enabled automatically expands the candidate pool** — no manual combo editing needed. The virtual combo is rebuilt per request, so newly-added or newly-healthy connections are picked up immediately.
@@ -573,21 +652,25 @@ Persisted `strategy: "auto"` combos can set `config.routerStrategy` (or legacy
 `config.auto.routerStrategy`) to one of:
 
 - `rules` — default weighted scoring
+- `score` — selects the highest configured weighted score. Exact ties preserve configured
+  candidate order; the existing `explorationRate` samples from the full ranked pool.
 - `cost` / `eco` — cheapest healthy provider
 - `latency` / `fast` — lowest p95 latency with reliability penalty
 - `sla-aware` / `sla` — prefer candidates that satisfy p95 latency, error-rate, and optional
   cost SLOs
 - `lkgp` — last known good provider first
+- `nadir` — ask [Nadir](https://getnadir.com)'s decision API which model in the pool the
+  prompt needs; opt-in, fail-open to `rules`
 
 ### Router strategies in detail
 
-The auto-combo engine exposes 5 pluggable **RouterStrategy** implementations that
+The auto-combo engine exposes 7 pluggable **RouterStrategy** implementations that
 you can swap via `config.routerStrategy` (or the legacy `config.auto.routerStrategy`).
 Each strategy picks one provider from the candidate pool, given a `RoutingContext`
 (task type, tool/vision hints, token estimate, optional SLA policy, optional
 last-known-good provider).
 
-#### 1. `rules` (default) — 6-factor weighted scoring
+#### 1. `rules` (default) — 16-factor weighted scoring
 
 Wraps the existing scoring engine. Filters out `OPEN` circuit-breaker
 candidates, then runs `scorePool()` with the current task type and `getTaskFitness()`,
@@ -596,8 +679,7 @@ picking the top-scoring provider.
 ```ts
 class RulesStrategyImpl implements RouterStrategy {
   readonly name = "rules";
-  readonly description =
-    "6-factor weighted scoring: quota, health, cost, latency, taskFit, stability";
+  readonly description = "16-factor weighted scoring (see DEFAULT_WEIGHTS)";
 
   select(pool, context) {
     const eligible = pool.filter((c) => c.circuitBreakerState !== "OPEN");
@@ -756,6 +838,51 @@ follow-up requests (e.g., for caching, context continuity, or pricing consistenc
 
 ---
 
+#### 6. `nadir` — prompt-aware model choice via Nadir
+
+Every strategy above ranks the candidates by their own telemetry; none of them reads
+the request. `nadir` sends the last user turn plus the pool's model ids to
+[Nadir](https://getnadir.com)'s decision API (`POST /v1/bucket`) and routes to the model
+Nadir selects from that menu (`simple` → the cheapest capable model, `complex` → the
+frontier one). The connection serving that model is still picked by `rules`, so quota,
+health and cost keep deciding which account.
+
+```json
+{
+  "strategy": "auto",
+  "config": {
+    "routerStrategy": "nadir",
+    "nadir": {
+      "apiKey": "ndr_...",
+      "baseUrl": "https://api.getnadir.com",
+      "timeoutMs": 2000
+    }
+  }
+}
+```
+
+`OMNIROUTE_NADIR_API_KEY` and `OMNIROUTE_NADIR_BASE_URL` are env fallbacks for the two
+strings. `baseUrl` is only needed for a self-hosted Nadir (a trailing `/v1` is tolerated).
+Keyless calls land on Nadir's anonymous tier, which is rate-limited per IP.
+
+What leaves the box: the last user message's text (first 16k characters), the candidate
+model ids and a `source: "omniroute"` channel tag. No system prompt, history, tools or
+headers.
+
+Failure behavior is fail-open: a timeout (default 2000 ms), a non-2xx, an unreachable
+host, a malformed response or a selection outside the pool resolves to the `rules`
+decision and the reason is prefixed `NadirStrategy: fallback (…)`. After a failed call the
+strategy skips the network for 30 s, so an outage costs one timeout per 30 s rather than
+one per request. Routing events report `strategy: "nadir"` only when Nadir actually made
+the choice.
+
+**When to use**: mixed-difficulty traffic on a pool that spans model tiers (a small, a mid
+and a frontier model), where always-frontier is the cost you want to cut.
+
+**Alias**: `nadir` (no alias)
+
+---
+
 ### Custom router strategies
 
 You can register your own `RouterStrategy` implementation via the public API:
@@ -808,6 +935,7 @@ Then use it:
 | Minimize latency  | `latency`   | Picks fastest reliable provider      |
 | Strict SLOs       | `sla-aware` | Filters by p95/error/cost thresholds |
 | Multi-turn chat   | `lkgp`      | Session stickiness                   |
+| Mixed difficulty  | `nadir`     | Picks the model tier per prompt      |
 
 SLA-aware fields:
 
@@ -857,7 +985,7 @@ To strongly favor Tier 1 (subscription), increase `tierPriority` weight:
 }
 ```
 
-See `docs/marketing/TIERS.md` for tier definitions and provider classification.
+See [`docs/guides/TIERS.md`](../guides/TIERS.md) for tier definitions and provider classification.
 
 ## Testing & Coverage
 

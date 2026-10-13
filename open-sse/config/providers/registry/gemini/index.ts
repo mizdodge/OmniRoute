@@ -1,5 +1,5 @@
 import type { RegistryEntry } from "../../shared.ts";
-import { resolvePublicCred } from "../../shared.ts";
+import { buildGeminiGenerateContentUrl, resolvePublicCred } from "../../shared.ts";
 
 export const geminiProvider: RegistryEntry = {
   id: "gemini",
@@ -7,10 +7,7 @@ export const geminiProvider: RegistryEntry = {
   format: "gemini",
   executor: "default",
   baseUrl: "https://generativelanguage.googleapis.com/v1beta/models",
-  urlBuilder: (base, model, stream) => {
-    const action = stream ? "streamGenerateContent?alt=sse" : "generateContent";
-    return `${base}/${model}:${action}`;
-  },
+  urlBuilder: buildGeminiGenerateContentUrl,
   authType: "apikey",
   authHeader: "x-goog-api-key",
   defaultContextLength: 1048576,
@@ -21,6 +18,12 @@ export const geminiProvider: RegistryEntry = {
     clientSecretDefault: resolvePublicCred("gemini_alt"),
   },
   models: [
+    {
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      toolCalling: true,
+      supportsVision: true,
+    },
     {
       id: "gemini-3.7-flash",
       name: "Gemini 3.7 Flash",

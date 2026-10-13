@@ -1,1 +1,0 @@
-- **fix(providers):** MonsterAPI's deprecation now actually applies — the flag was written as `isDeprecated`, a key no consumer or schema reads, so the provider kept rendering as healthy in the dashboard, the onboarding wizard and the generated provider reference ([#10234](https://github.com/diegosouzapw/OmniRoute/pull/10234))

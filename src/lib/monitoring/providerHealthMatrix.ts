@@ -121,7 +121,8 @@ interface CallLogTargetStats {
   lastErrorStatus: number | null;
 }
 
-const RANGE_MS: Record<ProviderHealthMatrixRange, number> = {
+/** Exported so other surfaces reporting over a window use the same scale. */
+export const RANGE_MS: Record<ProviderHealthMatrixRange, number> = {
   "1h": 60 * 60 * 1000,
   "24h": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
@@ -364,15 +365,15 @@ export async function buildProviderHealthMatrix(
     Promise.resolve(queryCallLogTargetStats(cutoff, null)),
   ]);
 
-  const connectionRows = (connections as JsonRecord[]).filter((connection) => {
+  const connectionRows = (connections as unknown as JsonRecord[]).filter((connection) => {
     const provider = canonicalProviderId(connection.provider);
     return provider && (!providerFilter || provider === providerFilter);
   });
-  const breakerRows = (breakers as JsonRecord[]).filter((breaker) => {
+  const breakerRows = (breakers as unknown as JsonRecord[]).filter((breaker) => {
     const provider = canonicalProviderId(breaker.name);
     return provider && (!providerFilter || provider === providerFilter);
   });
-  const lockoutRows = (lockouts as JsonRecord[]).filter((lockout) => {
+  const lockoutRows = (lockouts as unknown as JsonRecord[]).filter((lockout) => {
     const provider = canonicalProviderId(lockout.provider);
     return provider && (!providerFilter || provider === providerFilter);
   });
@@ -625,9 +626,9 @@ export async function buildProviderHealthMatrix(
       pools: poolReport.providers.map((p) => ({
         provider: p.provider,
         health: p.health,
-        pool: p.pool as Record<string, unknown> | null,
-        breaker: p.breaker as Record<string, unknown> | null,
-        sessions: p.sessions as Array<Record<string, unknown>>,
+        pool: p.pool as unknown as Record<string, unknown> | null,
+        breaker: p.breaker as unknown as Record<string, unknown> | null,
+        sessions: p.sessions as unknown as Array<Record<string, unknown>>,
         issues: p.issues,
       })),
     },

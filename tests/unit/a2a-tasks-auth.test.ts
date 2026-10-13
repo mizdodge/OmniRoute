@@ -8,7 +8,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const TASKS_ROUTE = path.resolve(__dirname, "../../src/app/api/a2a/tasks/route.ts");
-const A2A_ROUTE = path.resolve(__dirname, "../../src/app/a2a/route.ts");
+// GHSA-jcm5-6wpp-wjj8: the constant-time token comparison moved out of
+// src/app/a2a/route.ts into the shared helper both surfaces now use.
+const A2A_AUTH_HELPER = path.resolve(__dirname, "../../src/lib/a2a/authenticate.ts");
 
 const source = fs.readFileSync(TASKS_ROUTE, "utf-8");
 
@@ -21,11 +23,11 @@ function hasImport(src: string, name: string, from: string): boolean {
   return pattern.test(src);
 }
 
-test("tasks route uses the same constant-time contract as src/app/a2a/route.ts", () => {
-  const a2aSource = fs.readFileSync(A2A_ROUTE, "utf-8");
+test("tasks route uses the same constant-time contract as the shared A2A auth helper", () => {
+  const a2aSource = fs.readFileSync(A2A_AUTH_HELPER, "utf-8");
   assert.ok(
-    hasImport(a2aSource, "timingSafeEqual", "node:crypto"),
-    "reference route imports timingSafeEqual"
+    hasImport(a2aSource, "timingSafeEqual", "crypto"),
+    "shared auth helper imports timingSafeEqual"
   );
 
   assert.ok(

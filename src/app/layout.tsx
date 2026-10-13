@@ -1,20 +1,16 @@
-import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/shared/components/ThemeProvider";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, getLocale, getTranslations } from "next-intl/server";
 import { RTL_LOCALES } from "@/i18n/config";
 import { normalizeComplianceEventTypes } from "@/i18n/request";
-import { getSettings } from "@/lib/db/settings";
+import { pickMessages } from "@/i18n/pickMessages";
+import routeNamespaces from "@/i18n/routeNamespaces.generated.json";
+import { getRootLayoutSettings } from "@/lib/db/rootLayoutSettings";
 import type { Viewport } from "next";
 import { PwaRegister } from "@/shared/components/PwaRegister";
 import { LocaleAutoDetect } from "@/shared/components/LocaleAutoDetect";
 import { BasePathNetworkProvider } from "@/shared/components/BasePathNetworkProvider";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
 
 export const viewport: Viewport = {
   themeColor: "#0b0f1a",
@@ -22,9 +18,9 @@ export const viewport: Viewport = {
 };
 
 export async function generateMetadata() {
-  const settings = await getSettings();
-  const instanceName = settings?.instanceName || "OmniRoute";
-  const customFaviconUrl = settings?.customFaviconUrl || settings?.customFaviconBase64;
+  const settings = await getRootLayoutSettings();
+  const instanceName = settings.instanceName;
+  const customFaviconUrl = settings.customFaviconUrl || settings.customFaviconBase64;
 
   return {
     title: `${instanceName} — AI Gateway for Multi-Provider LLMs`,
@@ -56,7 +52,16 @@ export async function generateMetadata() {
 export default async function RootLayout({ children }) {
   const locale = await getLocale();
   const t = await getTranslations("sidebar");
-  const messages = normalizeComplianceEventTypes((await getMessages()) as Record<string, unknown>);
+  // Serialize ONLY the public-surface namespaces into the flight payload.
+  // The full merged catalog is ~664 KB across 132 namespaces and used to be
+  // embedded in every rendered page (757-865 KB HTML even for /login and
+  // 404). Dashboard sections re-scope it with their own providers via
+  // SectionI18nProvider — see scripts/i18n/generate-route-namespaces.mjs.
+  // IMPORTANT: never remove the explicit `messages` prop — next-intl then
+  // falls back to embedding the whole catalog again.
+  const messages = normalizeComplianceEventTypes(
+    pickMessages((await getMessages()) as Record<string, unknown>, routeNamespaces.root)
+  );
   const isRtl = RTL_LOCALES.includes(locale as (typeof RTL_LOCALES)[number]);
 
   return (
@@ -135,7 +140,7 @@ export default async function RootLayout({ children }) {
           }}
         />
       </head>
-      <body className={`${inter.variable} font-sans antialiased`} suppressHydrationWarning>
+      <body className="font-sans antialiased" suppressHydrationWarning>
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-[#6366f1] focus:text-white focus:rounded-lg focus:text-sm focus:font-semibold focus:shadow-lg"

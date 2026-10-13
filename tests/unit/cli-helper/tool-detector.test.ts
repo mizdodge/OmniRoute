@@ -2,6 +2,14 @@ import { describe, it, before } from "node:test";
 import assert from "node:assert";
 import * as toolDetector from "../../../src/lib/cli-helper/tool-detector.ts";
 
+// The Hermes tool detector honors a HERMES_HOME env var (#3628) and only falls
+// back to the default ~/.hermes/config.yaml path when it is unset. CI runs with
+// HERMES_HOME unset, but this suite can also run inside a Hermes Agent session
+// that exports HERMES_HOME, which redirects the detected config path and breaks
+// the ".hermes/config.yaml" assertion below. Unset it so the test is hermetic
+// and matches CI regardless of the ambient runtime.
+delete process.env.HERMES_HOME;
+
 describe("tool-detector", () => {
   before(() => {
     // Install mock exec implementation for deterministic testing

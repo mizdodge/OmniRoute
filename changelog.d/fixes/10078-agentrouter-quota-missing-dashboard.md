@@ -1,2 +1,0 @@
-- Fix: wire AgentRouter's existing console balance fetcher into the Dashboard Quota UI (visibility gate + provider-limits data path + background sync) so its wallet balance renders instead of falling back to "Usage API not implemented" (#10078)
-- Fix: AgentRouter's dollar balance now renders as a currency-formatted "$X.XX" credits row in the Dashboard Quota UI instead of a bare percentage, and an exhausted wallet always shows exactly $0.00 (#10078)

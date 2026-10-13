@@ -3,9 +3,10 @@ import {
   analyzePrefix,
   generatePromptCacheKey,
 } from "../../../src/lib/promptCache/prefixAnalyzer.ts";
-import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
+import { getCachedProviderPoolConnections } from "../providerConnectionPool.ts";
 import { parseModel } from "../model.ts";
 import type { ResolvedComboTarget } from "./types.ts";
+import { getStrategyTraits } from "./strategyRegistry.ts";
 import { getOAuthSessionAvailability } from "../oauthSessionOccupancy.ts";
 
 interface PromptCacheAffinityTarget {
@@ -208,7 +209,7 @@ export async function expandPromptCacheAffinityTargets(
   await Promise.all(
     providers.map(async (provider) => {
       try {
-        const connections = (await getCachedProviderConnections({
+        const connections = (await getCachedProviderPoolConnections({
           provider,
           isActive: true,
         })) as Array<Record<string, unknown>>;
@@ -301,12 +302,7 @@ export function shouldProtectOriginalFirst(
   return (
     stickyStuck ||
     autoUsedExplicitRouter ||
-    strategy === "quota-share" ||
-    strategy === "weighted" ||
-    strategy === "priority" ||
-    strategy === "fill-first" ||
-    strategy === "lkgp" ||
-    strategy === "auto"
+    getStrategyTraits(strategy).protectsFirstTargetFromAffinity
   );
 }
 

@@ -26,10 +26,11 @@
     "testFailed": "Teste do provedor falhou: {error}",
     "loginEnabled": "Login: habilitado (senha atualizada)",
     "loginDisabled": "Login: desabilitado",
-    "providerInfo": "Provedor: {info}"
+    "providerInfo": "Provedor: {info}",
+    "opencode": "Instala e configura o plugin @omniroute/opencode-plugin incluído para o OpenCode"
   },
   "doctor": {
-    "title": "OmniRoute Doctor",
+    "title": "Diagnóstico do OmniRoute",
     "dbOk": "Banco de dados: OK ({path})",
     "dbMissing": "Banco de dados: não inicializado — execute `omniroute setup`",
     "portOk": "Porta {port}: disponível",
@@ -253,8 +254,12 @@
     "log": "Exibir logs do servidor inline",
     "no_recovery": "Desabilitar reinício automático em crash (modo debug)",
     "max_restarts": "Máximo de reinícios em 30s antes de desistir (padrão: 2)",
+    "headless": "Executa só o motor de proxy: dashboard desativado (404), subsistemas opcionais ignorados (define OMNIROUTE_HEADLESS=1)",
     "tray": "Mostrar ícone na bandeja do sistema (apenas desktop, opt-in)",
-    "no_tray": "Desabilitar ícone na bandeja do sistema"
+    "no_tray": "Desabilitar ícone na bandeja do sistema",
+    "ready_timeout": "Tempo limite da verificação de prontidão em ms (também OMNIROUTE_READY_TIMEOUT_MS, padrão 60000)",
+    "tls_cert": "Caminho para um certificado TLS (PEM) para servir HTTPS (também OMNIROUTE_TLS_CERT)",
+    "tls_key": "Caminho para a chave privada TLS (PEM) para servir HTTPS (também OMNIROUTE_TLS_KEY)"
   },
   "backup": {
     "title": "Backup",
@@ -298,7 +303,7 @@
     "noServer": "Servidor não está em execução. Inicie com: omniroute serve",
     "title": "Saúde",
     "status": "Status: {status}",
-    "uptime": "Uptime: {uptime}",
+    "uptime": "Tempo de atividade: {uptime}",
     "requests": "Requisições (24h): {count}",
     "cost": "Custo (24h): ${cost}"
   },
@@ -341,6 +346,19 @@
   },
   "mcp": {
     "title": "Servidor MCP",
+    "running": "Servidor MCP em execução ({transport})",
+    "stopped": "Servidor MCP parado.",
+    "restarted": "Servidor MCP reiniciado.",
+    "stoppedHint": "Execute `omniroute mcp enable` para ativá-lo.",
+    "enabled": "Servidor MCP ativado.",
+    "disabled": "Servidor MCP desativado.",
+    "enable": {
+      "description": "Ativar o servidor MCP",
+      "transport": "Transporte a ser usado: stdio|sse|streamable-http"
+    },
+    "disable": {
+      "description": "Desativar o servidor MCP"
+    },
     "call": {
       "description": "Invocar uma ferramenta MCP diretamente",
       "args": "Objeto JSON de argumentos (inline)",
@@ -368,10 +386,7 @@
     },
     "audit": {
       "description": "Log de auditoria MCP (alias para audit --source mcp)"
-    },
-    "running": "Servidor MCP em execução ({transport})",
-    "stopped": "Servidor MCP parado.",
-    "restarted": "Servidor MCP reiniciado."
+    }
   },
   "a2a": {
     "skills": {
@@ -1090,7 +1105,7 @@
     }
   },
   "combo": {
-    "title": "Combos",
+    "title": "Combinações",
     "switched": "Combo ativo: {name}",
     "created": "Combo criado: {name}",
     "deleted": "Combo removido: {name}",
@@ -1265,7 +1280,7 @@
     "description": "REPL interativo multi-turn com LLM",
     "model": "Modelo a usar (padrão: auto)",
     "combo": "Nome do combo a usar",
-    "system": "System prompt",
+    "system": "Prompt do sistema",
     "resume": "Retomar sessão salva pelo nome"
   },
   "plugin": {

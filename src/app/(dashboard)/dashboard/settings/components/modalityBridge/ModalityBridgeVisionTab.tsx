@@ -172,6 +172,18 @@ export default function ModalityBridgeVisionTab() {
           value={settings.modalityBridgeVisionModel}
           placeholder={t("modalityBridgeVisionModelAuto")}
           allowEmpty
+          // #10809: read the unified catalog (all configured providers +
+          // user-added custom models — matching the Audio tab's modelSource)
+          // so active upstream vision models are never missed. #10703: the
+          // filter still lists only vision-capable models, so text-only code
+          // models (cmd/gpt-5.3-codex, cmd/deepseek/deepseek-v4-pro, …) never
+          // appear as Vision Bridge candidates. allowCustomInput keeps an
+          // editable text field so operators can type a self-hosted / unlisted
+          // vision model.
+          modelSource="catalog"
+          modelFilter={(model) => model.supportsVision === true}
+          allowCustomInput
+          testId="modality-bridge-vision-model"
           onChange={(value) => void update({ modalityBridgeVisionModel: value })}
           className="text-sm"
         />

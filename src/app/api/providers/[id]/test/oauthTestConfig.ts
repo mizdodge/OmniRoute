@@ -2,6 +2,15 @@ import { buildGitLabOAuthEndpoints, resolveGitLabOAuthBaseUrl } from "@/lib/oaut
 import { ANTIGRAVITY_RUNTIME_BASE_URLS } from "@omniroute/open-sse/config/antigravityUpstream.ts";
 import { getAntigravityContentHeaders } from "@omniroute/open-sse/services/antigravityHeaders.ts";
 import { getAntigravityClientProfile } from "@omniroute/open-sse/services/antigravityClientProfile.ts";
+import {
+  generateAntigravityRequestId,
+  getAntigravityEnvelopeUserAgent,
+} from "@omniroute/open-sse/services/antigravityIdentity.ts";
+import {
+  ensureAntigravityProjectAssigned,
+  ANTIGRAVITY_REQUIRES_MANUAL_PROJECT,
+} from "@omniroute/open-sse/services/antigravityProjectBootstrap.ts";
+import { isGeoBlockedError } from "@omniroute/open-sse/services/errorClassifier.ts";
 
 // Real model-surface probe for antigravity/agy. The previous probe only hit the
 // OAuth userinfo endpoint, which is NOT geo-restricted — so "Test Connection"
@@ -13,11 +22,42 @@ import { getAntigravityClientProfile } from "@omniroute/open-sse/services/antigr
 //   401/403  -> token bad
 // Mirrors AntigravityExecutor.buildUrl/buildHeaders so the probe exercises the
 // exact same surface as real requests.
-function buildAntigravityProbe(
+async function buildAntigravityProbe(
   connection: { providerSpecificData?: unknown },
   accessToken: string
 ) {
   const profile = getAntigravityClientProfile(connection as never);
+  const providerSpecificData =
+    connection.providerSpecificData && typeof connection.providerSpecificData === "object"
+      ? (connection.providerSpecificData as Record<string, unknown>)
+      : undefined;
+  const connectionProjectId =
+    typeof (connection as Record<string, unknown>)?.projectId === "string" &&
+    ((connection as Record<string, unknown>).projectId as string).trim()
+      ? ((connection as Record<string, unknown>).projectId as string).trim()
+      : undefined;
+  const storedProjectId =
+    typeof providerSpecificData?.projectId === "string" && providerSpecificData.projectId.trim()
+      ? providerSpecificData.projectId.trim()
+      : undefined;
+  let projectId = connectionProjectId || storedProjectId;
+  if (!projectId && accessToken) {
+    try {
+      const discoveredProjectId = await ensureAntigravityProjectAssigned(
+        accessToken,
+        fetch,
+        profile,
+        AbortSignal.timeout(8000)
+      );
+      if (discoveredProjectId && discoveredProjectId !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) {
+        projectId = discoveredProjectId;
+      }
+    } catch {
+      // Project discovery is best effort for the probe; the request still
+      // exercises the same Cloud Code envelope and reports its real status.
+    }
+  }
+
   return {
     url: `${ANTIGRAVITY_RUNTIME_BASE_URLS[0]}/v1internal:streamGenerateContent?alt=sse`,
     method: "POST",
@@ -28,8 +68,15 @@ function buildAntigravityProbe(
       ...getAntigravityContentHeaders(profile, accessToken),
     },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: "ping" }] }],
-      generationConfig: { maxOutputTokens: 1 },
+      ...(projectId ? { project: projectId } : {}),
+      requestId: generateAntigravityRequestId(),
+      request: {
+        contents: [{ role: "user", parts: [{ text: "ping" }] }],
+        generationConfig: { maxOutputTokens: 1 },
+      },
+      model: "gemini-3.1-flash-lite",
+      userAgent: getAntigravityEnvelopeUserAgent(connection as never),
+      requestType: "agent",
     }),
   };
 }
@@ -79,6 +126,7 @@ export interface OAuthTestConfigEntry {
   extraHeaders?: Record<string, string>;
   body?: string;
   acceptStatuses?: number[];
+  inconclusiveStatuses?: number[];
   checkExpiry?: boolean;
   refreshable?: boolean;
   getUrl?: (connection: any) => string;
@@ -86,6 +134,39 @@ export interface OAuthTestConfigEntry {
     connection: any,
     accessToken: string
   ) => OAuthTestProbeRequest | Promise<OAuthTestProbeRequest>;
+}
+
+export interface OAuthProbeInconclusiveClassification {
+  warning: string;
+  diagnosisType: "ok";
+  diagnosisCode: "probe_inconclusive";
+}
+
+export function classifyOAuthProbeInconclusive(
+  config: OAuthTestConfigEntry,
+  provider: string,
+  status: number,
+  bodyText: string
+): OAuthProbeInconclusiveClassification | null {
+  if (
+    !Array.isArray(config.inconclusiveStatuses) ||
+    !config.inconclusiveStatuses.includes(status)
+  ) {
+    return null;
+  }
+
+  // Preserve the current upstream geo-block contract. Google's explicit
+  // location refusal is an egress/upstream availability failure, not a
+  // successful connection-test result.
+  if ((provider === "antigravity" || provider === "agy") && isGeoBlockedError(bodyText)) {
+    return null;
+  }
+
+  return {
+    warning: `${provider} probe returned HTTP ${status}; credential validity is inconclusive`,
+    diagnosisType: "ok",
+    diagnosisCode: "probe_inconclusive",
+  };
 }
 
 export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
@@ -126,6 +207,7 @@ export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
     // Real model-surface probe (see buildAntigravityProbe above): userinfo-only
     // probing stayed green while the model API was geo-blocked.
     buildProbe: buildAntigravityProbe,
+    inconclusiveStatuses: [400],
     refreshable: true,
   },
   // `agy` is a separate connection id that shares the Antigravity backend and the same
@@ -135,6 +217,7 @@ export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
   // perfectly good account. Probe the same model surface as antigravity.
   agy: {
     buildProbe: buildAntigravityProbe,
+    inconclusiveStatuses: [400],
     refreshable: true,
   },
   xai: XAI_CHAT_OAUTH_TEST_CONFIG,
@@ -163,20 +246,25 @@ export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
     checkExpiry: true,
     refreshable: true,
   },
+  "muse-code": {
+    // Minted Muse inference keys have no advertised expiry. Validate presence;
+    // remint from the stored dca token is the refresh path (CLIProxyAPI parity).
+    checkExpiry: true,
+    refreshable: true,
+  },
   kilocode: {
     // Kilo OAuth does not expose a stable user-info endpoint in all environments.
     // Validate using token presence/expiry as a lightweight auth check.
     checkExpiry: true,
   },
-  raycast: {
-    // #8895 — Raycast Pro is an `import_token` provider: the token is imported
-    // from the local Raycast install, `refreshToken` is always null and the
-    // stored `expiresIn` defaults to 30 days. There is nothing to refresh, so
-    // the test is the expiry check on the imported token; without an entry here
-    // Test Connection persists testStatus="error" on a healthy account (#8408).
+  "zed-hosted": {
+    // Zed Hosted Models uses a long-lived native-app access token with no
+    // expiry or refresh token. Validate presence here; real connectivity is
+    // exercised by chat requests through the ZedHostedExecutor.
     checkExpiry: true,
   },
   cline: CLINE_OAUTH_TEST_CONFIG,
+  // cline API key connections (dual-auth path) use the default live-probe.
   // ClinePass reuses the same WorkOS OAuth flow and token lifecycle as Cline.
   clinepass: CLINE_OAUTH_TEST_CONFIG,
   kiro: {
@@ -191,6 +279,23 @@ export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
     // Upstream test endpoint mirrors "tokenExists: true" from the CodeBuddy port —
     // validate auth via token presence + refresh path. Live connectivity is
     // verified through real /v2/chat/completions traffic.
+    checkExpiry: true,
+    refreshable: true,
+  },
+  "codebuddy-intl": {
+    checkExpiry: true,
+    refreshable: true,
+  },
+  workbuddy: {
+    // WorkBuddy is a separate product from CodeBuddy CN (own host and account
+    // system) but shares the same plugin-auth protocol shape, so the same
+    // reasoning applies: validate on token presence + the refresh path.
+    //
+    // Deliberately NOT a live probe against GET /v3/config. That endpoint
+    // answers 200 with `data.models: null` for an unauthenticated caller
+    // (verified 2026-09-19), so a 2xx there proves reachability, not auth —
+    // it would turn a dead token green. Real connectivity is exercised by
+    // every /v2/chat/completions request.
     checkExpiry: true,
     refreshable: true,
   },

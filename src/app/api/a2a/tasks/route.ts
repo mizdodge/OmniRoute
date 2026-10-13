@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getTaskManager, type TaskState } from "@/lib/a2a/taskManager";
+import { authorizeA2ATaskRoute } from "@/app/api/a2a/_auth";
 import { createConductorTask } from "@/lib/conductor/hubProxy";
 import { getSettings } from "@/lib/db/settings";
 
@@ -22,6 +23,11 @@ function parseIntParam(value: string | null, fallback: number): number {
 }
 
 export async function GET(request: Request) {
+  // GHSA-jcm5-6wpp-wjj8: the list route had no auth call at all. Management
+  // (or the keyless posture) sees every task; a bare API key must be valid
+  // and is owner-scoped.
+  const auth = await authorizeA2ATaskRoute(request);
+  if (auth instanceof Response) return auth;
   try {
     const { searchParams } = new URL(request.url);
     const stateParam = searchParams.get("state");
@@ -36,7 +42,7 @@ export async function GET(request: Request) {
 
     const tm = getTaskManager();
     const total = tm.countTasks({ state, skill });
-    const tasks = tm.listTasks({ state, skill, limit, offset });
+    const tasks = tm.listTasks({ state, skill, limit, offset }, auth.owner);
 
     return NextResponse.json({
       tasks,
@@ -104,7 +110,10 @@ export function authenticateA2A(request: Request): boolean {
  */
 export async function POST(request: Request) {
   if (!authenticateA2A(request)) {
-    return NextResponse.json({ error: "Unauthorized: missing or invalid API key" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized: missing or invalid API key" },
+      { status: 401 }
+    );
   }
   const settings = await getSettings();
   if (settings.a2aEnabled !== true) {
@@ -122,12 +131,18 @@ export async function POST(request: Request) {
   }
   const parsed = delegationSchema.safeParse(raw);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid A2A task: provide messages[] (and metadata.conductor)" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid A2A task: provide messages[] (and metadata.conductor)" },
+      { status: 400 }
+    );
   }
   const { skill, messages, metadata } = parsed.data;
   if (skill !== "conductor" && !skill.startsWith("conductor-cli-")) {
     return NextResponse.json(
-      { error: "Only Conductor fleet skills are delegable here (conductor / conductor-cli-<profile>)" },
+      {
+        error:
+          "Only Conductor fleet skills are delegable here (conductor / conductor-cli-<profile>)",
+      },
       { status: 400 }
     );
   }
@@ -138,7 +153,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const prompt = [...messages].reverse().find((m) => m.role === "user")?.content ?? messages[messages.length - 1].content;
+  const prompt =
+    [...messages].reverse().find((m) => m.role === "user")?.content ??
+    messages[messages.length - 1].content;
 
   const created = await createConductorTask({
     repoUrl: conductor.repo.url,

@@ -9,6 +9,7 @@ import {
   mergeUpstreamExtraHeaders,
   setUserAgentHeader,
 } from "../../open-sse/executors/base.ts";
+import { shouldForceResponsesUpstream } from "../../open-sse/executors/forceResponsesUpstream.ts";
 import { DefaultExecutor } from "../../open-sse/executors/default.ts";
 import { PROVIDERS } from "../../open-sse/config/constants.ts";
 import {
@@ -18,6 +19,7 @@ import {
   CONTEXT_1M_BETA_HEADER,
 } from "../../open-sse/services/claudeCodeCompatible.ts";
 import { runWithCapture } from "../../open-sse/utils/providerRequestLogging.ts";
+import { CLAUDE_CODE_CLIENT_BILLING_VERSION } from "../../src/shared/constants/claudeCodeClient.ts";
 
 class TestExecutor extends BaseExecutor {
   constructor(config = {}) {
@@ -600,9 +602,8 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
       stream: false,
       credentials: {
         apiKey: "cc-key",
-        providerSpecificData: {
-          ccSessionId: "session-1",
-        },
+        // #13452: buildUrl() now requires a hydrated baseUrl.
+        providerSpecificData: { ccSessionId: "session-1", baseUrl: "https://cc.test/v1" },
       },
       clientHeaders: {
         "x-app": "cli",
@@ -622,6 +623,7 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
         apiKey: "cc-key",
         providerSpecificData: {
           ccSessionId: "session-1",
+          baseUrl: "https://cc.test/v1",
           requestDefaults: { context1m: true, redactThinking: true },
         },
       },
@@ -657,6 +659,7 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
         apiKey: "cc-key",
         providerSpecificData: {
           ccSessionId: "session-1",
+          baseUrl: "https://cc-proxy.example.test/v1",
           requestDefaults: { context1m: true },
         },
       },
@@ -733,9 +736,7 @@ test("DefaultExecutor.execute reports the exact serialized provider request befo
         stream: false,
         credentials: {
           apiKey: "cc-key",
-          providerSpecificData: {
-            ccSessionId: "session-1",
-          },
+          providerSpecificData: { ccSessionId: "session-1", baseUrl: "https://cc.test/v1" }, // #13452
         },
       })
     );
@@ -1311,7 +1312,7 @@ test("DefaultExecutor.refreshCredentials swallows refresh errors and logs them",
 
   try {
     const result = await executor.refreshCredentials(
-      { refreshToken: "refresh-me" },
+      { refreshToken: "refresh-me-unrotated" },
       { error: (tag, message) => messages.push({ tag, message }) }
     );
     assert.equal(result, null);
@@ -1570,11 +1571,61 @@ test("DefaultExecutor.execute does not produce duplicate anthropic-version heade
   assert.equal(versionKeys.length, 1, "Duplicate anthropic-version header keys found");
   assert.equal(capturedHeaders[versionKeys[0]], "2023-06-01");
   assert.equal(capturedHeaders["X-Stainless-Runtime-Version"], "v26.3.0");
-  assert.equal(capturedHeaders["X-Stainless-Package-Version"], "0.94.0");
+  assert.equal(capturedHeaders["X-Stainless-Package-Version"], "0.112.1");
 
   const sentBody = JSON.parse(capturedBody) as { system?: Array<{ text?: string }> };
-  assert.match(
-    sentBody.system?.[0]?.text ?? "",
-    /^x-anthropic-billing-header: cc_version=2\.1\.220\.1f2; cc_entrypoint=cli; cch=[0-9a-f]{5};$/
+  const cc = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_CLIENT_BILLING_VERSION}; `;
+  const billing = sentBody.system?.[0]?.text ?? "";
+  assert.equal(billing.slice(0, cc.length), cc, "cc_version tracks the constant (#14627)");
+  assert.match(billing.slice(cc.length), /^cc_entrypoint=cli; cch=[0-9a-f]{5};$/);
+});
+
+test('shouldForceResponsesUpstream respects explicit apiType="chat" even when namespace tools are present', () => {
+  const body = {
+    input: "hi",
+    tools: [
+      {
+        type: "namespace",
+        name: "collaboration",
+        tools: [
+          {
+            name: "spawn_agent",
+            description: "Spawn an agent",
+            parameters: { type: "object", properties: { task: { type: "string" } } },
+          },
+        ],
+      },
+    ],
+  };
+  const credentials = {
+    providerSpecificData: {
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      apiType: "chat",
+    },
+  };
+  assert.equal(
+    shouldForceResponsesUpstream("openai-compatible-responses-demo", body, credentials),
+    false
   );
+});
+
+test("shouldForceResponsesUpstream still forces /responses for untyped OpenAI-compatible providers with namespace tools", () => {
+  const body = {
+    input: "hi",
+    tools: [
+      {
+        type: "namespace",
+        name: "collaboration",
+        tools: [
+          { name: "spawn_agent", description: "Spawn an agent", parameters: { type: "object" } },
+        ],
+      },
+    ],
+  };
+  const credentials = {
+    providerSpecificData: {
+      baseUrl: "https://proxy.example/v1",
+    },
+  };
+  assert.equal(shouldForceResponsesUpstream("openai-compatible-test", body, credentials), true);
 });

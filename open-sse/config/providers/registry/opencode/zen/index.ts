@@ -1,4 +1,5 @@
 import type { RegistryEntry } from "../../../shared.ts";
+import { OPENCODE_ZEN_GO_SHARED_MODELS } from "../../../shared.ts";
 
 export const opencode_zenProvider: RegistryEntry = {
   id: "opencode-zen",
@@ -25,9 +26,40 @@ export const opencode_zenProvider: RegistryEntry = {
       supportsReasoning: true,
       interleavedField: "reasoning_content",
     },
-    { id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
-    { id: "gpt-5.6-terra", name: "GPT 5.6 Terra" },
-    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna" },
+
+    ...OPENCODE_ZEN_GO_SHARED_MODELS,
+    // models[0] (big-pickle) is the dashboard default; SHARED spread kept after it.
+
+    // ── GPT-5.6 ─────────────────────────────────────────────────
+    // Upstream serves this trio only on /responses — /chat/completions answers
+    // 503 "Endpoint is unavailable" (live-verified 2026-09-19 against
+    // opencode.ai/zen/v1 with the same key on both endpoints). #12196 made the
+    // same declaration for gpt-5.6-luna on opencode-go; the zen entries here
+    // never got it.
+    {
+      id: "gpt-5.6-sol",
+      name: "GPT 5.6 Sol",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],
+      targetFormat: "openai-responses",
+      maxOutputTokens: 128000,
+    },
+    {
+      id: "gpt-5.6-terra",
+      name: "GPT 5.6 Terra",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],
+      targetFormat: "openai-responses",
+      maxOutputTokens: 128000,
+    },
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT 5.6 Luna",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],
+      targetFormat: "openai-responses",
+      maxOutputTokens: 128000,
+    },
     { id: "gpt-5.4", name: "GPT 5.4" },
     { id: "gpt-5.4-mini", name: "GPT 5.4 Mini" },
     { id: "gpt-5.4-nano", name: "GPT 5.4 Nano" },
@@ -51,22 +83,86 @@ export const opencode_zenProvider: RegistryEntry = {
     { id: "grok-4.6", name: "Grok 4.6" },
 
     // ── Muse ───────────────────────────────────────────────────
-    { id: "muse-spark-1.2", name: "Muse Spark 1.2" },
+    // Muse Spark is served by OpenCode Zen only on the OpenAI Responses API
+    // endpoint, not /chat/completions (see the opencode provider's own
+    // muse-spark entries, #10874/#10867) — this provider is a separate
+    // registry entry for the same upstream and never got the same
+    // targetFormat declaration, so requests routed here still hit
+    // /chat/completions with a mismatched or unanswerable body and the
+    // upstream returns an empty message.
+    // #12681: real window confirmed against the opencode-go registry's own
+    // muse-spark-1.2-contributor entries (contextLength: 1048576, maxOutputTokens:
+    // 131072) — without an explicit value here resolution fell back to the
+    // provider-wide defaultContextLength (200000), understating the real window.
+    {
+      id: "muse-spark-1.2",
+      name: "Muse Spark 1.2",
+      supportsReasoning: true,
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+    },
+    // Explicit wire-format overlay of the base opencode provider's muse-spark entry
+    // (targetFormat: openai-responses). Keep in sync with base on catalog syncs.
+    {
+      id: "muse-spark-1.2-contributor-free",
+      name: "Muse Spark 1.2 Contributor Free",
+      supportsReasoning: true,
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+    },
+    // Muse Spark 1.3 is served only on the Responses API, same as 1.2 above.
+    // Its window matches the published OpenCode catalog instead of the
+    // 200000 provider default.
+    {
+      id: "muse-spark-1.3",
+      name: "Muse Spark 1.3",
+      supportsReasoning: true,
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+    },
+    {
+      id: "muse-spark-1.3-contributor-free",
+      name: "Muse Spark 1.3 Contributor Free",
+      supportsReasoning: true,
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+    },
 
     // ── DeepSeek ────────────────────────────────────────────────
-    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+    // #10788: same tier vocabulary as opencode-go's DeepSeek rows — the Zen
+    // upstream accepts the identical effort set on these models.
+    {
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high", "max"],
+    },
+    {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high", "max"],
+    },
 
     // ── GLM / Z.AI ─────────────────────────────────────────────
-    { id: "glm-5.2", name: "GLM-5.2" },
+    {
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["high", "max"],
+    },
 
     // ── MiniMax ────────────────────────────────────────────────
     // #3110: MiniMax M3 — frontier coding model with 1M context
     { id: "minimax-m3", name: "MiniMax M3", contextLength: 1048576, supportsVision: true },
 
     // ── Kimi / Moonshot ────────────────────────────────────────
-    { id: "kimi-k3", name: "Kimi K3" },
-    { id: "kimi-k2.7-code", name: "Kimi K2.7 Code" },
+    { id: "kimi-k3", name: "Kimi K3", supportsReasoning: true, supportedThinkingEfforts: ["max"] },
+    // kimi-k2.7-code declared identically on opencode-go — see OPENCODE_ZEN_GO_SHARED_MODELS.
 
     // ── Qwen ───────────────────────────────────────────────────
     // Issue #2292: Qwen models return Claude-format SSE bodies even
@@ -74,8 +170,8 @@ export const opencode_zenProvider: RegistryEntry = {
     // through /messages and the Claude translator.
     // Issue #2822: These models are text-only — supportsVision: false
     // ensures combo routing skips them on image-bearing requests.
-    { id: "qwen3.5-plus", name: "Qwen3.5 Plus", targetFormat: "claude", supportsVision: false },
-    { id: "qwen3.6-plus", name: "Qwen3.6 Plus", targetFormat: "claude", supportsVision: false },
+    // qwen3.5-plus / qwen3.6-plus declared identically on opencode-go — see
+    // OPENCODE_ZEN_GO_SHARED_MODELS.
 
     // ── Free Tier ──────────────────────────────────────────────
     // #6998 (2026-07-14): upstream free tier rotated — minimax-m2.5-free,
@@ -83,7 +179,16 @@ export const opencode_zenProvider: RegistryEntry = {
     // 2026-08-17 sync: north-mini-code-free delisted; nemotron-3.5-lightning-free
     // and laguna-s-2.1-free added.
     { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportsReasoning: true },
-    { id: "mimo-v2.5-free", name: "MiMo V2.5 Free", contextLength: 200000 },
+    { id: "mimo-v2.5-free", name: "MiMo V2.5 Free", contextLength: 1048576 },
+    // MiMo V2.6 Flash Free ships a 1M window upstream (same as V2.5); without
+    // this row it falls through to the 200000 provider default and clients
+    // compact far too early.
+    {
+      id: "mimo-v2.6-flash-free",
+      name: "MiMo V2.6 Flash Free",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+    },
     { id: "hy3-free", name: "HY3 Free", contextLength: 200000 },
     { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", contextLength: 1000000 },
     { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free" },

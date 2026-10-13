@@ -6,6 +6,7 @@ import {
   applyCodexClientMetadata,
   applyCodexOriginalIdentityHeaders,
   createCodexClientIdentity,
+  ensureCodexFingerprintSeed,
   getCodexClientSessionId,
   getCodexConvergedSessionId,
   getCodexConvergedThreadId,
@@ -370,4 +371,85 @@ test("Codex websocket headers and payload share one fingerprint identity", async
   assert.equal(wsHeaders["x-client-request-id"], metadata.thread_id);
   assert.equal(wsHeaders["x-codex-window-id"], metadata["x-codex-window-id"]);
   assert.equal(payload.type, "response.create");
+});
+
+test("Codex fingerprint seed: persisted seed drives v2 derivation deterministically", () => {
+  const seed = "11111111-2222-4233-8444-555555555555";
+  const seeded = { workspaceId: "workspace-42", codexFingerprintSeed: seed };
+
+  const installationId = getCodexInstallationId(seeded, "connection-42");
+  const sessionId = getCodexConvergedSessionId(seeded, "connection-42");
+  const threadId = getCodexConvergedThreadId("client-session", seeded, "connection-42");
+
+  // Deterministic: same seed → same ids, regardless of the connection key.
+  assert.equal(getCodexInstallationId(seeded, "another-connection"), installationId);
+  assert.equal(getCodexConvergedSessionId(seeded, "another-connection"), sessionId);
+  assert.equal(getCodexConvergedThreadId("client-session", seeded, null), threadId);
+
+  // v2 derivation deliberately rotates away from the legacy workspace-derived ids.
+  const legacy = { workspaceId: "workspace-42" };
+  assert.notEqual(installationId, getCodexInstallationId(legacy, "connection-42"));
+  assert.notEqual(sessionId, getCodexConvergedSessionId(legacy, "connection-42"));
+
+  // Two connections never share an identity once seeded (sub2api #5696).
+  const otherSeed = { codexFingerprintSeed: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" };
+  assert.notEqual(getCodexInstallationId(otherSeed, "connection-42"), installationId);
+  assert.notEqual(getCodexConvergedSessionId(otherSeed, "connection-42"), sessionId);
+
+  // Admin-configured explicit installation id still wins over the seed.
+  assert.equal(
+    getCodexInstallationId(
+      { ...seeded, codexInstallationId: "99999999-8888-4777-8666-555555555555" },
+      "connection-42"
+    ),
+    "99999999-8888-4777-8666-555555555555"
+  );
+});
+
+test("ensureCodexFingerprintSeed creates once, preserves, and skips non-converged", () => {
+  const oauth = { accessToken: "oauth-token" };
+
+  // Default mode (session) on OAuth → seed created.
+  const created = ensureCodexFingerprintSeed(undefined, oauth);
+  assert.match(created?.codexFingerprintSeed as string, /^[0-9a-f-]{36}$/);
+
+  // The stored seed ALWAYS wins over an incoming payload that omits it
+  // (partial update) or carries a client-forged one (system-managed key).
+  const stored = { codexFingerprintSeed: "11111111-2222-4233-8444-555555555555" };
+  assert.deepEqual(ensureCodexFingerprintSeed(undefined, oauth, stored), stored);
+  assert.deepEqual(
+    ensureCodexFingerprintSeed(
+      { codexFingerprintSeed: "99999999-8888-4777-8666-555555555555" },
+      oauth,
+      stored
+    ),
+    stored
+  );
+  // The stored seed stays dormant when the mode is switched off.
+  assert.deepEqual(ensureCodexFingerprintSeed({ codexFingerprintMode: "off" }, oauth, stored), {
+    codexFingerprintMode: "off",
+    codexFingerprintSeed: "11111111-2222-4233-8444-555555555555",
+  });
+
+  // Explicit off without a stored seed stays seedless; a client-supplied seed
+  // on create is stripped and replaced by a system-generated one.
+  assert.deepEqual(ensureCodexFingerprintSeed({ codexFingerprintMode: "off" }, oauth), {
+    codexFingerprintMode: "off",
+  });
+  const forgedOnCreate = ensureCodexFingerprintSeed(
+    { codexFingerprintSeed: "99999999-8888-4777-8666-555555555555" },
+    oauth
+  );
+  assert.match(forgedOnCreate?.codexFingerprintSeed as string, /^[0-9a-f-]{36}$/);
+  assert.notEqual(forgedOnCreate?.codexFingerprintSeed, "99999999-8888-4777-8666-555555555555");
+
+  // Non-OAuth (API key) connections are never seeded.
+  assert.equal(ensureCodexFingerprintSeed(undefined, { apiKey: "sk-x" }), undefined);
+  assert.equal(ensureCodexFingerprintSeed(undefined, undefined), undefined);
+
+  // device/full modes require the seed as well.
+  for (const mode of ["device", "full"]) {
+    const result = ensureCodexFingerprintSeed({ codexFingerprintMode: mode }, oauth);
+    assert.match(result?.codexFingerprintSeed as string, /^[0-9a-f-]{36}$/);
+  }
 });

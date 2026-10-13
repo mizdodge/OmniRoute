@@ -10,17 +10,22 @@ import {
   resolveSearchProvider,
   selectProvider,
   supportsSearchType,
+  isUnconfiguredLoopbackSearchProvider,
   SEARCH_PROVIDERS,
-  SEARCH_CREDENTIAL_FALLBACKS,
+  getSearchCredentialFallbacks,
 } from "@omniroute/open-sse/config/searchRegistry.ts";
-import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { buildErrorBody, errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import * as log from "@/sse/utils/logger";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1SearchSchema } from "@/shared/validation/schemas";
-import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { recordCost } from "@/domain/costRules";
+import {
+  formatValidationMessage,
+  isValidationFailure,
+  validateBody,
+} from "@/shared/validation/helpers";
+import { recordSearchUsageCost } from "@omniroute/open-sse/handlers/search/reportedCost.ts";
 import {
   computeCacheKey,
   getOrCoalesce,
@@ -31,7 +36,10 @@ import {
   rateLimitedProviderResponse,
   type RateLimitedCredentials,
 } from "@/app/api/v1/_shared/rateLimit";
+import { getSettings } from "@/lib/db/settings";
+import { isProviderBlockedByIdOrAlias } from "@/shared/utils/noAuthProviders";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { saveCallLog } from "@/lib/usageDb";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -49,7 +57,9 @@ export async function OPTIONS() {
  * GET /v1/search — list available search providers
  */
 export async function GET() {
-  const providers = getAllSearchProviders();
+  const settings = await getSettings().catch(() => ({}) as any);
+  const blockedProviders = settings?.blockedProviders || [];
+  const providers = getAllSearchProviders(blockedProviders);
   const timestamp = Math.floor(Date.now() / 1000);
 
   const data = providers.map((p) => ({
@@ -72,17 +82,17 @@ async function resolveSearchCredentials(providerId: string): Promise<SearchCrede
   const credentials = await getProviderCredentialsWithQuotaPreflight(providerId).catch(() => null);
   if (credentials && !isAllRateLimitedCredentials(credentials)) return credentials;
 
-  const fallbackId = SEARCH_CREDENTIAL_FALLBACKS[providerId];
-  if (!fallbackId) return credentials;
-
-  const fallbackCredentials = await getProviderCredentialsWithQuotaPreflight(fallbackId).catch(
-    () => null
-  );
-  if (fallbackCredentials && !isAllRateLimitedCredentials(fallbackCredentials)) {
-    return fallbackCredentials;
+  for (const fallbackId of getSearchCredentialFallbacks(providerId)) {
+    const fallbackCredentials = await getProviderCredentialsWithQuotaPreflight(fallbackId).catch(
+      () => null
+    );
+    if (fallbackCredentials && !isAllRateLimitedCredentials(fallbackCredentials)) {
+      return fallbackCredentials;
+    }
+    if (fallbackCredentials) return fallbackCredentials;
   }
 
-  return fallbackCredentials || credentials;
+  return credentials;
 }
 
 async function resolveSearchExecutionCredentials(providerConfig: {
@@ -110,6 +120,7 @@ function buildDomainFilter(filters?: {
  * POST /v1/search — execute a web search
  */
 async function postHandler(request: Request, context: unknown) {
+  const requestStartTime = Date.now();
   let rawBody: unknown;
   try {
     rawBody = await request.json();
@@ -120,16 +131,27 @@ async function postHandler(request: Request, context: unknown) {
 
   const validation = validateBody(v1SearchSchema, rawBody);
   if (isValidationFailure(validation)) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, validation.error.message);
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, formatValidationMessage(validation.error));
   }
   const body = validation.data;
+  if (body.provider === "x_search") body.provider = "x-search";
+  if (body.provider === "x-search") body.search_type = "x";
 
   // Enforce API key policies — use "search" as model identifier for consistent policy config
   const policy = await enforceApiKeyPolicy(request, "search");
   if (policy.rejection) return policy.rejection;
 
+  const settings = await getSettings().catch(() => ({}) as any);
+  const blockedProviders = settings?.blockedProviders || [];
+
   // Resolve provider and credentials
   if (body.provider) {
+    if (isProviderBlockedByIdOrAlias(body.provider, blockedProviders)) {
+      return errorResponse(
+        HTTP_STATUS.FORBIDDEN,
+        `Search provider ${body.provider} is blocked by security policy`
+      );
+    }
     const explicitProvider = resolveSearchProvider(body.provider);
     if (!explicitProvider) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `Unknown search provider: ${body.provider}`);
@@ -143,6 +165,21 @@ async function postHandler(request: Request, context: unknown) {
   }
 
   let providerConfig = selectProvider(body.provider, body.search_type);
+  if (
+    providerConfig &&
+    !body.provider &&
+    isProviderBlockedByIdOrAlias(providerConfig.id, blockedProviders)
+  ) {
+    const unblockedCandidate = Object.values(SEARCH_PROVIDERS)
+      .filter(
+        (p) =>
+          !p.fallbackOnly &&
+          supportsSearchType(p, body.search_type) &&
+          !isProviderBlockedByIdOrAlias(p.id, blockedProviders)
+      )
+      .sort((a, b) => a.costPerQuery - b.costPerQuery)[0];
+    providerConfig = unblockedCandidate || null;
+  }
   if (!providerConfig) {
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,
@@ -188,7 +225,10 @@ async function postHandler(request: Request, context: unknown) {
       // are reached via the last-resort step below, never the primary pick).
       const sortedIds = Object.values(SEARCH_PROVIDERS)
         .filter(
-          (provider) => !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
+          (provider) =>
+            !provider.fallbackOnly &&
+            supportsSearchType(provider, body.search_type) &&
+            !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
         )
         .sort((a, b) => a.costPerQuery - b.costPerQuery)
         .map((p) => p.id);
@@ -204,6 +244,34 @@ async function postHandler(request: Request, context: unknown) {
         if (altConfig && altCreds) {
           providerConfig = altConfig;
           credentials = altCreds;
+          break;
+        }
+      }
+    }
+
+    // Last resort before failing: promote a fallback-only free provider (e.g.
+    // duckduckgo-free) to the primary pick so out-of-the-box search works when
+    // no credentialed provider is configured at all.
+    if (!credentials) {
+      const fallbackProviders = Object.values(SEARCH_PROVIDERS)
+        .filter(
+          (provider) =>
+            provider.fallbackOnly &&
+            supportsSearchType(provider, body.search_type) &&
+            !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+        )
+        .sort((a, b) => a.costPerQuery - b.costPerQuery);
+
+      for (const fallbackProvider of fallbackProviders) {
+        providerConfig = fallbackProvider;
+        if (fallbackProvider.id === "duckduckgo-free") {
+          credentials = {};
+          break;
+        }
+        const fallbackCreds = await resolveSearchCredentials(fallbackProvider.id);
+        if (isAllRateLimitedCredentials(fallbackCreds)) continue;
+        if (fallbackCreds) {
+          credentials = fallbackCreds;
           break;
         }
       }
@@ -249,6 +317,7 @@ async function postHandler(request: Request, context: unknown) {
     if (!alternateProviderId) {
       for (const provider of Object.values(SEARCH_PROVIDERS)) {
         if (!provider.fallbackOnly || provider.id === providerConfig.id) continue;
+        if (isUnconfiguredLoopbackSearchProvider(provider)) continue;
         if (!supportsSearchType(provider, body.search_type)) continue;
         const fallbackCreds = await resolveSearchExecutionCredentials(provider);
         if (fallbackCreds && !isAllRateLimitedCredentials(fallbackCreds)) {
@@ -303,6 +372,13 @@ async function postHandler(request: Request, context: unknown) {
         log,
         connectionId: credentials?.connectionId || undefined,
         apiKeyId: policy.apiKeyInfo?.id || undefined,
+        timeoutMs:
+          typeof settings?.searchTimeoutMs === "number" ? settings.searchTimeoutMs : undefined,
+        providerTimeoutsMs:
+          settings?.searchProviderTimeoutsMs &&
+          typeof settings.searchProviderTimeoutsMs === "object"
+            ? settings.searchProviderTimeoutsMs
+            : undefined,
       });
 
       if (!result.success) {
@@ -312,12 +388,38 @@ async function postHandler(request: Request, context: unknown) {
       return result.data!;
     });
 
+    // A cache hit short-circuits handleSearch() entirely, so none of its
+    // saveCallLog() calls (open-sse/handlers/search.ts) ever run — log this
+    // hit's own call_logs row here, or it never gets counted (#13928).
+    if (cached) {
+      saveCallLog({
+        method: "POST",
+        path: "/v1/search",
+        status: 200,
+        model: providerConfig.id,
+        provider: providerConfig.id,
+        duration: Date.now() - requestStartTime,
+        requestType: "search",
+        cacheSource: "semantic",
+        tokens: { prompt_tokens: 0, completion_tokens: 0 },
+        requestBody: {
+          query: body.query.slice(0, 200),
+          search_type: body.search_type,
+          max_results: clampedMaxResults,
+        },
+        responseBody: { results_count: searchResult.results?.length ?? 0, cached: true },
+        apiKeyId: policy.apiKeyInfo?.id || undefined,
+      }).catch(() => {
+        /* non-critical — logging must not block search response */
+      });
+    }
+
     // Record cost for budget tracking (skip cache hits — no provider cost)
-    if (!cached && policy.apiKeyInfo?.id && searchResult.usage?.search_cost_usd > 0) {
+    if (!cached) {
       try {
-        recordCost(policy.apiKeyInfo.id, searchResult.usage.search_cost_usd);
-      } catch (e: any) {
-        log.warn("SEARCH", `Cost recording failed: ${e?.message}`);
+        recordSearchUsageCost(policy.apiKeyInfo?.id, searchResult.provider, searchResult.usage);
+      } catch (e: unknown) {
+        log.warn("SEARCH", `Cost recording failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
@@ -342,9 +444,30 @@ async function postHandler(request: Request, context: unknown) {
     }
 
     log.error("SEARCH", `Unexpected error: ${err.message}`);
-    const errorPayload = toJsonErrorPayload(err.message, "Internal search error");
+    // Hard Rule #12 (#15159 wave 1.3): an unexpected internal exception — as
+    // opposed to the SearchError branch above, whose message is our own
+    // controlled provider-failure text — must never reach the client verbatim.
+    // An internal exception's message is OUR text: it can carry an absolute
+    // path, a SQL fragment, a credential echoed from a failed connection, or a
+    // stack tail. toJsonErrorPayload() is built for upstream provider bodies and
+    // returned an unparseable plain string straight through with zero
+    // sanitization — buildErrorBody() is the sanctioned boundary for this
+    // (docs/security/ERROR_SANITIZATION.md).
+    //
+    // This mirrors alpha/search/route.ts, which already had it right one file
+    // away; the log.error above is deliberately left unsanitized so the operator
+    // keeps the full diagnostic on the log path.
+    const errorPayload = buildErrorBody(
+      HTTP_STATUS.SERVER_ERROR,
+      String(err?.message ?? err),
+      undefined,
+      {
+        type: "internal_server_error",
+        code: "internal_server_error",
+      }
+    );
     return new Response(JSON.stringify(errorPayload), {
-      status: 500,
+      status: HTTP_STATUS.SERVER_ERROR,
       headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
   }

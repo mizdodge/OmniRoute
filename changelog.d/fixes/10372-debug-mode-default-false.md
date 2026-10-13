@@ -1,1 +1,0 @@
-- **fix(db):** `getSettings()` defaults `debugMode` to `false` — fresh installs no longer run in debug mode (persisted `debugMode: true` is preserved) ([#10372](https://github.com/diegosouzapw/OmniRoute/pull/10372) — thanks @lamchun1110)

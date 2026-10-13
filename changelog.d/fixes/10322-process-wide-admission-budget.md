@@ -1,1 +1,0 @@
-- **fix(chat-body-admission):** restore a single process-wide admission budget — heavyweight leases and queued bytes are now bounded once for the whole process instead of per session, so one session can no longer mint extra capacity or starve others; per-session fairness is preserved via round-robin dispatch ([#10110](https://github.com/diegosouzapw/OmniRoute/issues/10110))

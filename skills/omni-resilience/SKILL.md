@@ -25,6 +25,26 @@ curl https://localhost:20128/api/monitoring/health \
   -H "Authorization: Bearer $OMNIROUTE_TOKEN"
 ```
 
+### GET /api/monitoring/compression
+
+Get compression result-memo statistics
+
+In-process compression result-memo observability snapshot — size, capacity, lifetime hits/misses/hitRate plus 1m/5m/15m/1h windowed rates. Lightweight (no DB, no provider reads) companion to `GET /api/monitoring/health` intended for frequent polling. Sent with `Cache-Control: no-store, no-cache, must-revalidate`. Counters reset on process restart.
+
+```bash
+curl https://localhost:20128/api/monitoring/compression \
+  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
+```
+
+### GET /api/provider-metrics
+
+GET provider metrics
+
+```bash
+curl https://localhost:20128/api/provider-metrics \
+  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
+```
+
 ## Payloads
 
 See the full OpenAPI specification at `GET /api/openapi/spec` or `docs/openapi.yaml` for detailed request/response schemas.
@@ -34,7 +54,7 @@ See the full OpenAPI specification at `GET /api/openapi/spec` or `docs/openapi.y
 
 # OmniRoute — Monitoring & Health
 
-Requires `OMNIROUTE_URL` and `OMNIROUTE_KEY`. See [entry-point SKILL](https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute/SKILL.md) for setup.
+Requires `OMNIROUTE_URL` and `OMNIROUTE_KEY`. See [entry-point SKILL](https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-auth/SKILL.md) for setup.
 
 ## System health
 

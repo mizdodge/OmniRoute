@@ -1,1 +1,0 @@
-- **fix(providers):** zed-hosted OAuth now redirects the browser back to the dashboard's own loopback port (auto-completing the login), and the manual paste path accepts Zed's user_id/access_token callback URL instead of erroring with "No authorization code found" ([#10517](https://github.com/diegosouzapw/OmniRoute/pull/10517)) - thanks @phatchau036

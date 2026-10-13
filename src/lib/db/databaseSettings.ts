@@ -2,9 +2,17 @@ import fs from "node:fs";
 
 import { DEFAULT_DATABASE_SETTINGS, type DatabaseSettings } from "@/types/databaseSettings";
 
-import { backupDbFile } from "./backup";
+import { backupDbFile, setDbBackupMaxFiles } from "./backup";
 import { DATA_DIR, SQLITE_FILE, applyDatabaseOptimizationSettings, getDbInstance } from "./core";
 import { invalidateDbCache } from "./readCache";
+import {
+  CACHE_SECRET_MASK,
+  decryptCacheSecrets,
+  encryptCacheValue,
+  isCacheSecret,
+  assertCacheCredentialEndpoint,
+  encryptLegacyCacheSecretCopies,
+} from "./cacheSecrets";
 import { getDatabaseStats } from "./stats";
 import { getState as getVacuumSchedulerState, refreshVacuumScheduler } from "./vacuumScheduler";
 
@@ -37,6 +45,17 @@ const LEGACY_FLAT_KEYS: {
     semanticCacheEnabled: ["semanticCacheEnabled"],
     semanticCacheMaxSize: ["semanticCacheMaxSize"],
     semanticCacheTTL: ["semanticCacheTTL"],
+    semanticCacheVectorEnabled: ["semanticCacheVectorEnabled"],
+    semanticCacheBackend: ["semanticCacheBackend"],
+    semanticCacheThreshold: ["semanticCacheThreshold"],
+    semanticCacheEmbeddingProvider: ["semanticCacheEmbeddingProvider"],
+    semanticCacheEmbeddingModel: ["semanticCacheEmbeddingModel"],
+    semanticCacheEmbeddingDimension: ["semanticCacheEmbeddingDimension"],
+    semanticCacheEmbeddingBaseUrl: ["semanticCacheEmbeddingBaseUrl"],
+    semanticCacheEmbeddingApiKey: ["semanticCacheEmbeddingApiKey"],
+    semanticCacheRedisUrl: ["semanticCacheRedisUrl"],
+    semanticCacheRedisPrefix: ["semanticCacheRedisPrefix"],
+    semanticCacheRequireZeroTemp: ["semanticCacheRequireZeroTemp"],
     promptCacheEnabled: ["promptCacheEnabled"],
     promptCacheStrategy: ["promptCacheStrategy"],
     alwaysPreserveClientCache: ["alwaysPreserveClientCache"],
@@ -46,8 +65,10 @@ const LEGACY_FLAT_KEYS: {
     quotaSnapshots: ["quotaSnapshots"],
     compressionAnalytics: ["compressionAnalytics"],
     mcpAudit: ["mcpAudit"],
+    configAudit: ["configAudit"],
     a2aEvents: ["a2aEvents"],
     callLogs: ["callLogs"],
+    conversationTurnNodes: ["conversationTurnNodes"],
     usageHistory: ["usageHistory"],
     memoryEntries: ["memoryEntries"],
     domainCostHistory: ["domainCostHistory"],
@@ -235,6 +256,7 @@ export function getUserDatabaseSettings(): UserDatabaseSettings {
   mergeDatabaseSettingsNamespace(settings, readNamespace(DATABASE_SETTINGS_NAMESPACE));
   mergeRuntimeLogSettings(settings, mainSettings);
   normalizeOptimizationSettings(settings);
+  decryptCacheSecrets(settings.cache as unknown as Record<string, unknown>);
 
   return settings;
 }
@@ -259,6 +281,8 @@ export function getDatabaseSettings(): DatabaseSettings {
         vacuumState.lastRunAt !== null ? new Date(vacuumState.lastRunAt).toISOString() : null,
       lastOptimizationAt: null,
       integrityCheck: getIntegrityCheck(),
+      autoVacuumDrift: vacuumState.autoVacuumDrift,
+      lastReclaimedPages: vacuumState.lastReclaimedPages,
     },
   };
 }
@@ -267,11 +291,19 @@ export function updateDatabaseSettings(
   updates: Partial<UserDatabaseSettings>
 ): UserDatabaseSettings {
   const nextSettings = getUserDatabaseSettings();
+  assertCacheCredentialEndpoint(nextSettings.cache, updates.cache);
   const optimizationUpdated = updates.optimization !== undefined;
 
   for (const section of DATABASE_SETTINGS_SECTIONS) {
     if (updates[section] !== undefined) {
-      mergeSectionObject(nextSettings, section, updates[section]);
+      const sectionUpdate = { ...updates[section] };
+      if (section === "cache") {
+        for (const key of Object.keys(sectionUpdate)) {
+          if (isCacheSecret(key) && sectionUpdate[key] === CACHE_SECRET_MASK)
+            delete sectionUpdate[key];
+        }
+      }
+      mergeSectionObject(nextSettings, section, sectionUpdate);
     }
   }
   normalizeOptimizationSettings(nextSettings);
@@ -288,18 +320,29 @@ export function updateDatabaseSettings(
   const pipelineEnabled = requestedLogs?.callLogPipelineEnabled;
   const detailedEnabled = requestedLogs?.detailedLogsEnabled;
 
+  const requestedBackup = updates.backup as Partial<UserDatabaseSettings["backup"]> | undefined;
+  if (requestedBackup?.keepLastNBackups !== undefined) {
+    setDbBackupMaxFiles(nextSettings.backup.keepLastNBackups);
+  }
+
   const tx = db.transaction(() => {
     for (const section of DATABASE_SETTINGS_SECTIONS) {
       const sectionValues = nextSettings[section] as Record<string, unknown>;
 
       for (const [key, value] of Object.entries(sectionValues)) {
-        insert.run(DATABASE_SETTINGS_NAMESPACE, `${section}.${key}`, JSON.stringify(value));
+        const stored = section === "cache" ? encryptCacheValue(key, value) : value;
+        insert.run(
+          DATABASE_SETTINGS_NAMESPACE,
+          `${section}.${key}`,
+          JSON.stringify(stored ?? null)
+        );
       }
     }
 
     if (pipelineEnabled !== undefined) {
       settingsInsert.run("call_log_pipeline_enabled", JSON.stringify(Boolean(pipelineEnabled)));
     }
+    encryptLegacyCacheSecretCopies(db);
   });
   tx();
 

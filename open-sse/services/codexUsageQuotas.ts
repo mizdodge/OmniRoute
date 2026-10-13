@@ -4,6 +4,8 @@ import {
   CODEX_SPARK_QUOTA_WEEKLY,
   isCodexSparkLimitDescriptor,
 } from "../config/codexQuotaScopes.ts";
+import { inferWindowFamilyLabel } from "./quotaWindowLabel.ts";
+import { parseCodexPaidCredits, type CodexPaidCredits } from "@/lib/providers/codexPaidCredits";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -110,6 +112,7 @@ function buildPercentageQuota(window: JsonRecord, displayName?: string): CodexUs
 // duration instead of assuming primary=session / secondary=weekly by position.
 const WEEKLY_MIN_WINDOW_SECONDS = 6 * 24 * 3600; // >= ~6d
 const SESSION_MAX_WINDOW_SECONDS = 6 * 3600; // <= ~6h
+const MONTHLY_MIN_WINDOW_SECONDS = 20 * 24 * 3600; // >= ~20d (ChatGPT 30d plans)
 
 /**
  * A never-started window: `used_percent === 0` and the reset still spans the
@@ -133,12 +136,15 @@ function isLatentWindow(window: JsonRecord): boolean {
  * e.g. a 7-day `primary_window` is labeled "Weekly" rather than "Session".
  * Returns undefined for durations that don't clearly map to either bucket.
  */
-function windowDurationLabel(window: JsonRecord): "Session" | "Weekly" | undefined {
+function windowDurationLabel(window: JsonRecord): "Session" | "Weekly" | "Monthly" | undefined {
   const limitWindow = toNumber(
     getFieldValue(window, "limit_window_seconds", "limitWindowSeconds"),
     0
   );
   if (limitWindow <= 0) return undefined;
+  const inferred = inferWindowFamilyLabel(limitWindow);
+  if (inferred === "Monthly" || inferred === "Weekly" || inferred === "Session") return inferred;
+  if (limitWindow >= MONTHLY_MIN_WINDOW_SECONDS) return "Monthly";
   if (limitWindow >= WEEKLY_MIN_WINDOW_SECONDS) return "Weekly";
   if (limitWindow <= SESSION_MAX_WINDOW_SECONDS) return "Session";
   return undefined;
@@ -258,6 +264,7 @@ function parseRateLimitReachedType(data: JsonRecord): string | undefined {
 }
 
 export function buildCodexUsageQuotas(dataValue: unknown): {
+  paidCredits?: CodexPaidCredits;
   rateLimit: JsonRecord;
   quotas: Record<string, CodexUsageQuota>;
   /** Banked reset credits available on the account (undefined when absent/not eligible). */
@@ -266,6 +273,7 @@ export function buildCodexUsageQuotas(dataValue: unknown): {
   rateLimitReachedType?: string;
 } {
   const data = toRecord(dataValue);
+  const paidCredits = parseCodexPaidCredits(data.credits);
   const rateLimit = toRecord(getFieldValue(data, "rate_limit", "rateLimit"));
   const quotas: Record<string, CodexUsageQuota> = {};
   const bankedResetCredits = parseBankedResetCredits(data);
@@ -280,7 +288,7 @@ export function buildCodexUsageQuotas(dataValue: unknown): {
     const primaryLabel = windowDurationLabel(primaryWindow);
     quotas.session = buildPercentageQuota(
       primaryWindow,
-      primaryLabel === "Weekly" ? primaryLabel : undefined
+      primaryLabel === "Weekly" || primaryLabel === "Monthly" ? primaryLabel : undefined
     );
   }
 
@@ -357,7 +365,31 @@ export function buildCodexUsageQuotas(dataValue: unknown): {
   return {
     rateLimit,
     quotas,
-    ...(bankedResetCredits !== undefined ? { bankedResetCredits } : {}),
-    ...(rateLimitReachedType !== undefined ? { rateLimitReachedType } : {}),
+    ...buildOptionalUsageFields({ bankedResetCredits, paidCredits, rateLimitReachedType }),
+  };
+}
+
+/**
+ * Merges the optional top-level fields of buildCodexUsageQuotas' return value,
+ * isolated so the presence-check ternaries don't count against the parent
+ * function's cyclomatic/cognitive complexity ratchet.
+ */
+function buildOptionalUsageFields(fields: {
+  bankedResetCredits: number | undefined;
+  paidCredits: CodexPaidCredits | undefined;
+  rateLimitReachedType: string | undefined;
+}): {
+  bankedResetCredits?: number;
+  paidCredits?: CodexPaidCredits;
+  rateLimitReachedType?: string;
+} {
+  return {
+    ...(fields.bankedResetCredits !== undefined
+      ? { bankedResetCredits: fields.bankedResetCredits }
+      : {}),
+    ...(fields.paidCredits ? { paidCredits: fields.paidCredits } : {}),
+    ...(fields.rateLimitReachedType !== undefined
+      ? { rateLimitReachedType: fields.rateLimitReachedType }
+      : {}),
   };
 }

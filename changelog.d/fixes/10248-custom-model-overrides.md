@@ -1,1 +1,0 @@
-- **fix(models):** custom model metadata and compatible-provider context overrides now take precedence over discovered metadata, while deleting a synced model no longer creates a permanent tombstone so a later provider sync can restore it ([#10248](https://github.com/diegosouzapw/OmniRoute/pull/10248)) — thanks @jackjinke

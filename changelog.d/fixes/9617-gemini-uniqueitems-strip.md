@@ -1,1 +1,0 @@
-- fix(providers): strip uniqueItems from Gemini tool schemas (Gemini rejects it with 400 'Unknown name uniqueItems') (#9617)

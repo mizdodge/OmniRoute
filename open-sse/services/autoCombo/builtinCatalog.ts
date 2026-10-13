@@ -1,8 +1,10 @@
+import type { ModelCapabilityResolutionSnapshot } from "@/lib/modelCapabilities";
+
 import type { AutoVariant } from "./autoPrefix";
 import { VALID_VARIANTS } from "./autoPrefix";
 import type { PreparedVirtualAutoComboInputs } from "./virtualFactory";
 import { parseAutoSuffix, type AutoCategory, type AutoTier } from "./suffixComposition";
-import { isValidModelFamily, AUTO_FAMILY_IDS } from "./modelFamily";
+import { isValidModelFamily, AUTO_FAMILY_IDS, type ModelFamily } from "./modelFamily";
 
 export { AUTO_FAMILY_IDS };
 
@@ -39,9 +41,15 @@ export const AUTO_TEMPLATE_VARIANTS: Record<string, AutoVariant | undefined> = {
   "auto/cheap": "cheap",
   "auto/offline": "offline",
   "auto/smart": "smart",
-  "auto/claude-opus": "smart",
-  "auto/claude-sonnet": "coding",
+  // auto/claude-{opus,sonnet,haiku} are model-FAMILY ids (#15675), resolved by
+  // `isValidModelFamily` — not weight-pack variants (those left the pool unfiltered).
   "auto/best-free": "cheap",
+  // Subscription-first routing (see `subscriptionLadder.ts`). `auto/subscription`
+  // maps to no weight variant on purpose: its pool is already restricted to
+  // plan-included connections, so the scorer should rank them on merit rather
+  // than bias toward cheap/fast within an allowance the operator already paid for.
+  "auto/subscription": undefined,
+  "auto/thrifty": "cheap",
   // Chaos mode — parallel dispatch to top-N stable models
   "auto/best-chaos": "chaos",
   "auto/chaos": "chaos",
@@ -64,6 +72,18 @@ export const AUTO_SUFFIX_VARIANTS: string[] = [
   "auto/vision",
   "auto/multimodal",
 ];
+
+/**
+ * Flat `auto/*` ids that carry a tier overlay even though they are not written
+ * in `<category>:<tier>` form. `auto/best-free` established the pattern; the
+ * two subscription-first ids reuse it so a caller can ask for the behavior
+ * without also having to pick a category.
+ */
+export const FLAT_TIER_OVERLAY_IDS: Record<string, AutoTier> = {
+  "auto/best-free": "free",
+  "auto/subscription": "subscription",
+  "auto/thrifty": "thrifty",
+};
 
 type ResolvedAutoVariant =
   { recognized: true; variant: AutoVariant | undefined } | { recognized: false };
@@ -120,7 +140,8 @@ export function isPaidTierAutoId(autoId: string): boolean {
  */
 export type BuiltinAutoSpec =
   | { variant: AutoVariant | undefined }
-  | { category: AutoCategory; tier?: AutoTier };
+  | { category: AutoCategory; tier?: AutoTier }
+  | { family: ModelFamily };
 
 /**
  * Vision-flavored flat ids that MUST resolve to the `vision` category (candidate
@@ -148,6 +169,8 @@ export function resolveBuiltinAutoSpec(modelStr: string, suffix: string): Builti
     return { variant: resolved.variant };
   }
 
+  if (isValidModelFamily(suffix)) return { family: suffix };
+
   const parsed = parseAutoSuffix(suffix);
   if (parsed.valid) {
     return {
@@ -159,9 +182,14 @@ export function resolveBuiltinAutoSpec(modelStr: string, suffix: string): Builti
   return { variant: undefined };
 }
 
-export async function prepareBuiltinAutoComboInputs(): Promise<PreparedVirtualAutoComboInputs> {
+export async function prepareBuiltinAutoComboInputs(
+  resolutionSnapshot?: ModelCapabilityResolutionSnapshot
+): Promise<PreparedVirtualAutoComboInputs> {
   const { prepareVirtualAutoComboInputs } = await import("./virtualFactory.ts");
-  return prepareVirtualAutoComboInputs({ includeResolvedCapabilities: true });
+  return prepareVirtualAutoComboInputs({
+    includeResolvedCapabilities: true,
+    resolutionSnapshot,
+  });
 }
 
 export async function createBuiltinAutoCombo(
@@ -193,8 +221,9 @@ export async function createBuiltinAutoCombo(
   }
 
   if ("variant" in spec && spec.variant !== undefined) {
+    const overlayTier = FLAT_TIER_OVERLAY_IDS[modelStr];
     const virtualCombo = await materialize(spec.variant, {
-      ...(modelStr === "auto/best-free" ? { tier: "free" as const } : {}),
+      ...(overlayTier ? { tier: overlayTier } : {}),
     });
     virtualCombo.name = modelStr;
     virtualCombo.id = modelStr;
@@ -205,7 +234,11 @@ export async function createBuiltinAutoCombo(
   // auto/best-chat, auto/pro-chat) still materialize via the default
   // (unconstrained) virtual combo rather than throwing "Unknown built-in".
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
-    const virtualCombo = await materialize(undefined);
+    const overlayTier = FLAT_TIER_OVERLAY_IDS[modelStr];
+    const virtualCombo = await materialize(
+      undefined,
+      overlayTier ? { tier: overlayTier } : undefined
+    );
     virtualCombo.name = modelStr;
     virtualCombo.id = modelStr;
     return virtualCombo;

@@ -1,1 +1,0 @@
-- fix(cli): guarantee a non-empty `[STARTUP] Fatal:` log line for any instrumentation-hook boot throw, not just DB-driver init failures (#10171)

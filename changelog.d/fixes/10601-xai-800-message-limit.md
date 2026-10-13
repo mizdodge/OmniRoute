@@ -1,1 +1,0 @@
-- **fix(xai):** trim Chat Completions `messages` and Responses `input` to xAI's 800-item history cap before dispatch, so long tool loops no longer die on `413 Chat history exceeds the 800-message limit` ([#10601](https://github.com/diegosouzapw/OmniRoute/pull/10601))

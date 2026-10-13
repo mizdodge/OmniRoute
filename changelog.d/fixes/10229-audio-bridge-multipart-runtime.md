@@ -1,1 +1,0 @@
-- **Audio Bridge:** fix production transcription self-loop uploads so real audio reaches the configured STT provider instead of falling back to an unavailable-provider stub ([#10229](https://github.com/diegosouzapw/OmniRoute/pull/10229)).

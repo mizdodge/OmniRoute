@@ -1,1 +1,0 @@
-- **fix(a2a):** use a constant-time bearer compare in `/api/a2a/tasks` via `crypto.timingSafeEqual`, matching the `tokensMatch` helper already used in `src/app/a2a/route.ts` and removing the last non-constant secret comparison in the repo ([#10544](https://github.com/diegosouzapw/OmniRoute/pull/10544))

@@ -11,7 +11,8 @@ import {
   parseOcrModel,
   OCR_PROVIDERS,
 } from "../config/ocrRegistry.ts";
-import { errorResponse } from "../utils/error.ts";
+import { errorResponse, sanitizeErrorMessage } from "../utils/error.ts";
+import { buildSanitizedUpstreamErrorResponse } from "../utils/upstreamErrorResponse.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import {
@@ -151,12 +152,11 @@ export async function handleOcr({
 
     if (!res.ok) {
       const errText = await res.text();
-      return new Response(errText, {
+      return buildSanitizedUpstreamErrorResponse({
         status: res.status,
-        headers: {
-          "Content-Type": "application/json",
-          ...CORS_HEADERS,
-        },
+        rawBody: errText,
+        fallbackMessage: `OCR provider returned HTTP ${res.status}`,
+        headers: CORS_HEADERS,
       });
     }
 
@@ -181,7 +181,8 @@ export async function handleOcr({
     });
     return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
-    console.error("[OCR]", err);
+    const safeErrorMessage = sanitizeErrorMessage(err).trim() || "OCR request failed";
+    console.error("[OCR]", safeErrorMessage);
     return errorResponse(500, "OCR request failed");
   }
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveServerHost } from "../../bin/cli/utils/serverHost.mjs";
+import { resolveServerHost, resolveExposureWarning } from "../../bin/cli/utils/serverHost.mjs";
 
 test("serve hostname: Linux honors OMNIROUTE_SERVER_HOST when HOSTNAME is set", () => {
   assert.equal(
@@ -54,4 +54,27 @@ test("serve hostname: Windows preserves an explicit legacy HOSTNAME", () => {
 
 test("serve hostname: Windows ignores an auto-set HOSTNAME matching the machine", () => {
   assert.equal(resolveServerHost({ HOSTNAME: "windows-pc" }, "win32", "windows-pc"), "0.0.0.0");
+});
+
+test("exposure warning: fires when bound to all interfaces with no API-key requirement (GHSA-wmgv-ph3p-rv57)", () => {
+  const warning = resolveExposureWarning({}, "0.0.0.0");
+  assert.ok(warning, "a warning must be returned for the shipped default posture");
+  assert.match(warning, /REQUIRE_API_KEY/);
+  assert.match(warning, /OMNIROUTE_SERVER_HOST/);
+});
+
+test("exposure warning: silent when REQUIRE_API_KEY is enabled", () => {
+  assert.equal(resolveExposureWarning({ REQUIRE_API_KEY: "true" }, "0.0.0.0"), null);
+  assert.equal(resolveExposureWarning({ REQUIRE_API_KEY: "1" }, "0.0.0.0"), null);
+});
+
+test("exposure warning: silent on loopback binds", () => {
+  assert.equal(resolveExposureWarning({}, "127.0.0.1"), null);
+  assert.equal(resolveExposureWarning({}, "localhost"), null);
+  assert.equal(resolveExposureWarning({}, "::1"), null);
+});
+
+test("exposure warning: fires for a LAN bind too (any non-loopback interface)", () => {
+  assert.ok(resolveExposureWarning({}, "192.168.0.17"));
+  assert.ok(resolveExposureWarning({}, "::"));
 });

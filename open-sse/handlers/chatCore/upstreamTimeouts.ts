@@ -9,6 +9,7 @@ import {
   getLoggedOutputTokens,
   getReasoningTokens,
 } from "@/lib/usage/tokenAccounting";
+import { MAX_PROVIDER_SPECIFIC_TIMEOUT_MS } from "@/shared/validation/providerSpecificData";
 
 export function createBodyTimeoutError(timeoutMs: number): Error {
   const err = new Error(`Response body read timeout after ${timeoutMs}ms`);
@@ -89,14 +90,41 @@ function resolveProviderTimeoutMs(executor: unknown): number {
   }
 }
 
+/** Per-connection operator timeout tier: reads
+ *  `providerSpecificData.timeoutMs`, bounded to 1..86_400_000 ms.
+ *  Returns undefined when absent or invalid so the chain falls through. */
+export function resolveConnectionTimeoutMs(psd: unknown): number | undefined {
+  const timeoutMs = (psd as Record<string, unknown> | null | undefined)?.timeoutMs;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) return undefined;
+  const floored = Math.floor(timeoutMs);
+  if (floored < 1 || floored > MAX_PROVIDER_SPECIFIC_TIMEOUT_MS) return undefined;
+  return floored;
+}
+
 /**
  * Resolves the upstream header-response timeout in precedence order:
+ * connection-level override (`providerSpecificData.timeoutMs`) →
  * model-level override (registry `RegistryModel.timeoutMs`) → provider-level
  * override (`executor.getTimeoutMs()`) → global `FETCH_TIMEOUT_MS` default.
  * `provider`/`model` are optional so existing single-argument call sites
  * keep resolving to the provider/global chain unchanged (#6354).
  */
-export function getExecutorTimeoutMs(executor: unknown, provider?: string, model?: string): number {
+export function getExecutorTimeoutMs(
+  executor: unknown,
+  provider?: string,
+  model?: string,
+  connectionTimeoutMs?: number
+): number {
+  if (
+    typeof connectionTimeoutMs === "number" &&
+    Number.isFinite(connectionTimeoutMs) &&
+    connectionTimeoutMs > 0
+  ) {
+    // Defensive backstop for direct callers: resolveConnectionTimeoutMs is the
+    // gate (it rejects out-of-range values so the chain falls through); this
+    // clamp only caps values a future caller could pass unvetted.
+    return Math.min(Math.max(0, Math.floor(connectionTimeoutMs)), MAX_PROVIDER_SPECIFIC_TIMEOUT_MS);
+  }
   const modelOverride = resolveModelTimeoutOverride(provider, model);
   if (modelOverride !== undefined) return modelOverride;
   return resolveProviderTimeoutMs(executor);
@@ -164,6 +192,9 @@ export function normalizeExecutorResult(result: unknown): {
   headers: Record<string, string>;
   transformedBody: unknown;
   transport?: string;
+  /** Wire model id the executor actually sent upstream (undefined if unknown). */
+  model?: unknown;
+  upstreamDiagnostic?: Record<string, unknown>;
 } {
   if (isResponseLike(result)) {
     return { response: result, url: "", headers: {}, transformedBody: null };
@@ -182,6 +213,8 @@ export function normalizeExecutorResult(result: unknown): {
     headers?: Record<string, string>;
     transformedBody?: unknown;
     transport?: string;
+    model?: unknown;
+    upstreamDiagnostic?: Record<string, unknown>;
   };
   return {
     response: normalized.response,
@@ -189,13 +222,37 @@ export function normalizeExecutorResult(result: unknown): {
     headers: normalized.headers || {},
     transformedBody: normalized.transformedBody ?? null,
     transport: normalized.transport,
+    model: normalized.model,
+    // Internal-only failure classification (#3229). Travels with the response it
+    // describes so a later retry/recovery/fallback that replaces the response also
+    // replaces (or clears) the diagnostic instead of mislabelling the new one.
+    upstreamDiagnostic: normalized.upstreamDiagnostic,
   };
+}
+
+/**
+ * True when a settled executor result still carries a response body that is
+ * going to stream on the combined signal (a bare Response or the executor's
+ * `{ response }` wrapper). Only such a result needs the client-abort link to
+ * outlive the start-timeout race (#14342); anything else must release it (#12406).
+ */
+function settledResultHasLiveBody(result: unknown): boolean {
+  let response: unknown = null;
+  if (isResponseLike(result)) {
+    response = result;
+  } else if (result && typeof result === "object" && "response" in result) {
+    response = (result as { response?: unknown }).response;
+  }
+  if (!isResponseLike(response)) return false;
+  const { body, bodyUsed } = response as { body?: unknown; bodyUsed?: unknown };
+  return body != null && bodyUsed !== true;
 }
 
 export async function executeWithUpstreamStartTimeout<T>({
   executor,
   provider,
   model,
+  connectionTimeoutMs,
   signal,
   log,
   execute,
@@ -203,11 +260,12 @@ export async function executeWithUpstreamStartTimeout<T>({
   executor: unknown;
   provider: string;
   model: string;
+  connectionTimeoutMs?: number;
   signal: AbortSignal;
   log?: { warn?: (tag: string, message: string) => void } | null;
   execute: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
-  const timeoutMs = getExecutorTimeoutMs(executor, provider, model);
+  const timeoutMs = getExecutorTimeoutMs(executor, provider, model, connectionTimeoutMs);
   if (timeoutMs <= 0) return execute(signal);
   if (signal.aborted) throw createAbortError(signal);
 
@@ -238,15 +296,48 @@ export async function executeWithUpstreamStartTimeout<T>({
     }, timeoutMs);
   });
 
+  let abortPromiseListener: (() => void) | null = null;
   const abortPromise = new Promise<never>((_, reject) => {
-    signal.addEventListener("abort", () => reject(createAbortError(signal)), { once: true });
+    abortPromiseListener = () => reject(createAbortError(signal));
+    signal.addEventListener("abort", abortPromiseListener, { once: true });
   });
+  // Promise.race only subscribes to timeoutPromise/abortPromise once the array
+  // literal below has been evaluated. If execute() throws synchronously the race
+  // never runs, both promises are orphaned, and a later abort of the long-lived
+  // client signal surfaces as an unhandledRejection. That was the 2026-08-31
+  // production exit: a hedge sibling won after a client disconnect, the leaked
+  // listener below rebuilt the string reason as an AbortError, and nothing was
+  // awaiting the promise it rejected. Marking them handled keeps the race
+  // semantics (it still observes the rejections) while closing that path.
+  abortPromise.catch(() => {});
+  timeoutPromise.catch(() => {});
 
+  let keepClientAbortLink = false;
   try {
-    return await Promise.race([execute(combinedController.signal), timeoutPromise, abortPromise]);
+    const result = await Promise.race([
+      execute(combinedController.signal),
+      timeoutPromise,
+      abortPromise,
+    ]);
+    keepClientAbortLink = settledResultHasLiveBody(result);
+    return result;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
-    if (abortListener) signal.removeEventListener("abort", abortListener);
+    // The timeout only bounds time-to-headers, but the client-abort link must
+    // outlive it: once execute() resolves, the response body is still streaming
+    // on combinedController.signal, and a later client disconnect has to reach
+    // the upstream fetch or the provider keeps generating for nobody (#14342).
+    // Keep the link ONLY when the settled result carries such a live body; drop it
+    // when the attempt failed or resolved without a streaming body, so nothing
+    // stays registered on the client signal for a finished race (#12406).
+    // The listener is `once` and the client signal is per-request, so keeping it
+    // for a live body is bounded.
+    if (abortListener && !keepClientAbortLink) {
+      signal.removeEventListener("abort", abortListener);
+    }
+    // Never removed before this fix: one listener leaked onto the client signal
+    // per call (chatCore.ts invokes this once per executor attempt, plus retries).
+    if (abortPromiseListener) signal.removeEventListener("abort", abortPromiseListener);
     if (timeoutAbortListener) {
       timeoutController.signal.removeEventListener("abort", timeoutAbortListener);
     }

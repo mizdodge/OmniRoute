@@ -126,5 +126,3 @@ export const zedHosted = {
     },
   }),
 };
-
-export default zedHosted;

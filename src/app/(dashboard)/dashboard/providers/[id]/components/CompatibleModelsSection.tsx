@@ -1,4 +1,5 @@
 "use client";
+import { filterUnavailableModelRows } from "@/lib/providers/mergeProviderModelListing";
 /**
  * CompatibleModelsSection — Issue #3501 Phase 1e
  *
@@ -7,7 +8,7 @@
  *
  * Never imports from ProviderDetailPageClient.
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/shared/components";
 import {
   matchesModelCatalogQuery,
@@ -17,12 +18,15 @@ import { resolveManagedModelAlias } from "@/shared/utils/providerModelAliases";
 import { useNotificationStore } from "@/store/notificationStore";
 import {
   buildCompatMap,
+  formatProviderModelsErrorResponse,
   getDisplayModelAlias,
   providerText,
   type CompatModelRow,
 } from "../providerPageHelpers";
 import { ModelVisibilityToolbar } from "./ModelRow";
-import { sortModelsFreeFirst, isFreeModel } from "@/shared/utils/freeModels";
+import { sortModelsFreeFirst, isModelFreeBadge } from "@/shared/utils/freeModels";
+import { useStrictFreeBadge } from "./useStrictFreeBadge";
+import { useModelOutputOverrides } from "../hooks/useModelOutputOverrides";
 import PassthroughModelRow, { type PassthroughModelRowProps } from "./PassthroughModelRow";
 
 // ---------------------------------------------------------------------------
@@ -41,6 +45,7 @@ export interface CompatibleModelsSectionProps {
   providerDisplayAlias: string;
   modelAliases: Record<string, string>;
   availableModels?: CompatModelRow[];
+  syncedCatalogAuthoritative?: boolean;
   customModels?: CompatModelRow[];
   fallbackModels?: CompatModelRow[];
   allowImport: boolean;
@@ -80,11 +85,36 @@ export interface CompatibleModelsSectionProps {
 // Component
 // ---------------------------------------------------------------------------
 
+// #14337: fetch + parse kept out of the component so the mount effect sets state
+// only after the await — the same shape CustomModelsSection uses, and what the
+// set-state-in-effect rule requires.
+async function fetchProviderContextOverrides(
+  providerId: string
+): Promise<Record<string, number> | null> {
+  try {
+    const res = await fetch(`/api/provider-models?provider=${encodeURIComponent(providerId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows = Array.isArray(data?.modelContextOverrides) ? data.modelContextOverrides : [];
+    const next: Record<string, number> = {};
+    for (const row of rows) {
+      const id = typeof row?.modelId === "string" ? row.modelId : null;
+      const value = row?.contextWindowOverride;
+      if (id && typeof value === "number") next[id] = value;
+    }
+    return next;
+  } catch {
+    // A failed read leaves the badges absent; editing still works.
+    return null;
+  }
+}
+
 export default function CompatibleModelsSection({
   providerStorageAlias,
   providerDisplayAlias,
   modelAliases,
   availableModels = [],
+  syncedCatalogAuthoritative = false,
   customModels = [],
   fallbackModels = [],
   description,
@@ -126,7 +156,83 @@ export default function CompatibleModelsSection({
   const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
   const [freeFilter, setFreeFilter] = useState<"all" | "free" | "paid">("all");
   const [sortFreeFirst, setSortFreeFirst] = useState(false);
+
   const notify = useNotificationStore();
+  const outputOverrides = useModelOutputOverrides(providerStorageAlias, t);
+
+  // #14337: context-window overrides for rows that have no customModels entry.
+  // GET /api/provider-models returns them per provider; without this the value a
+  // synced row can already store was never read back, so the UI had nothing to
+  // show or seed the editor with.
+  const [contextOverrides, setContextOverrides] = useState<Record<string, number>>({});
+  const [savingContextModelId, setSavingContextModelId] = useState<string | null>(null);
+
+  const loadContextOverrides = useCallback(async () => {
+    const next = await fetchProviderContextOverrides(providerStorageAlias);
+    if (next) setContextOverrides(next);
+  }, [providerStorageAlias]);
+
+  useEffect(() => {
+    const run = async () => {
+      const next = await fetchProviderContextOverrides(providerStorageAlias);
+      if (next) setContextOverrides(next);
+    };
+    void run();
+  }, [providerStorageAlias]);
+
+  const saveContextWindowOverride = useCallback(
+    async (modelId: string, value: number | null) => {
+      // The row signals invalid input as NaN rather than guessing a value.
+      if (typeof value === "number" && Number.isNaN(value)) {
+        notify.error(t("contextWindowOverrideInvalid"));
+        return;
+      }
+      setSavingContextModelId(modelId);
+      try {
+        const res = await fetch("/api/provider-models", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: providerStorageAlias,
+            modelId,
+            // #4125 semantics, unchanged: a number sets the override, null clears
+            // it and the model falls back to the discovered/catalog value.
+            contextWindowOverride: value,
+          }),
+        });
+        if (!res.ok) {
+          const detail = await formatProviderModelsErrorResponse(res);
+          throw new Error(
+            detail ||
+              providerText(
+                t,
+                "failedSaveModelEndpointSettings",
+                "Failed to save model endpoint settings"
+              )
+          );
+        }
+        await loadContextOverrides();
+        notify.success(
+          providerText(t, "savedModelEndpointSettings", "Saved model endpoint settings")
+        );
+      } catch (e) {
+        console.error("Failed to save context window override:", e);
+        notify.error(
+          e instanceof Error && e.message
+            ? e.message
+            : providerText(
+                t,
+                "failedSaveModelEndpointSettings",
+                "Failed to save model endpoint settings"
+              )
+        );
+      } finally {
+        setSavingContextModelId(null);
+      }
+    },
+    [providerStorageAlias, loadContextOverrides, notify, t]
+  );
+  const strictFreeBadge = useStrictFreeBadge();
   const customModelMap = useMemo(() => buildCompatMap(customModels), [customModels]);
 
   const providerAliases = useMemo(
@@ -147,6 +253,7 @@ export default function CompatibleModelsSection({
       source: string;
       isFree: boolean;
       isHidden: boolean;
+      supportsVision?: boolean;
     }> = [];
     const seenModelIds = new Set<string>();
 
@@ -164,12 +271,18 @@ export default function CompatibleModelsSection({
         alias: aliasByModelId.get(model.id) || null,
         displayName: model.name || model.id,
         source,
-        isFree:
-          Boolean((model as any).free) ||
-          model.id.endsWith(":free") ||
-          /\bgr[aá]tis\b|\bfree\b/i.test(model.name || "") ||
-          isFreeModel(providerStorageAlias, { id: model.id }),
+        isFree: isModelFreeBadge(
+          providerStorageAlias,
+          {
+            id: model.id,
+            name: model.name,
+            free: (model as { free?: unknown }).free,
+            isFree: model.isFree,
+          },
+          { strict: strictFreeBadge }
+        ),
         isHidden: isModelHidden(model.id),
+        supportsVision: model.supportsVision,
       });
       seenModelIds.add(model.id);
     };
@@ -201,25 +314,38 @@ export default function CompatibleModelsSection({
         alias: displayAlias,
         displayName: displayAlias,
         source: customModel ? customModel.source || "custom" : "alias",
-        isFree:
-          modelId.endsWith(":free") ||
-          Boolean((customModel as any)?.free) ||
-          /\bgr[aá]tis\b|\bfree\b/i.test(customModel?.name || alias || "") ||
-          isFreeModel(providerStorageAlias, { id: modelId }),
+        isFree: isModelFreeBadge(
+          providerStorageAlias,
+          {
+            id: modelId,
+            name: customModel?.name || (alias as string) || "",
+            free: (customModel as { free?: unknown } | undefined)?.free,
+            isFree: customModel?.isFree,
+          },
+          { strict: strictFreeBadge }
+        ),
         isHidden: isModelHidden(modelId),
+        supportsVision: customModel?.supportsVision,
       });
       seenModelIds.add(modelId);
     }
 
-    return rows;
+    return filterUnavailableModelRows(
+      rows,
+      availableModels,
+      customModels,
+      syncedCatalogAuthoritative
+    );
   }, [
     availableModels,
+    syncedCatalogAuthoritative,
     customModelMap,
     customModels,
     fallbackModels,
     isModelHidden,
     providerAliases,
     providerStorageAlias,
+    strictFreeBadge,
   ]);
 
   const filteredModels = allModels.filter((model) => {
@@ -429,43 +555,53 @@ export default function CompatibleModelsSection({
             onAutoHideFailedChange={onAutoHideFailedChange}
           />
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {displayModels.map(({ modelId, alias, displayName, isHidden, source, isFree }) => {
-              const fullModel = `${providerDisplayAlias}/${modelId}`;
-              return (
-                <PassthroughModelRow
-                  key={`${providerStorageAlias}:${modelId}`}
-                  modelId={modelId}
-                  fullModel={fullModel}
-                  alias={alias}
-                  displayName={displayName}
-                  source={source}
-                  isFree={isFree}
-                  isHidden={isHidden}
-                  copied={copied}
-                  onCopy={onCopy}
-                  onDeleteAlias={
-                    source === "custom" || source === "manual"
-                      ? () => handleDeleteModel(modelId, alias)
-                      : source === "alias" && alias
-                        ? () => onDeleteAlias(alias)
-                        : undefined
-                  }
-                  onSetAlias={(a) => onSetAlias(modelId, a, providerStorageAlias)}
-                  t={t}
-                  showDeveloperToggle={!isAnthropic}
-                  effectiveModelNormalize={effectiveModelNormalize}
-                  effectiveModelPreserveDeveloper={effectiveModelPreserveDeveloper}
-                  getUpstreamHeadersRecord={(p) => getUpstreamHeadersRecord(modelId, p)}
-                  saveModelCompatFlags={saveModelCompatFlags}
-                  compatDisabled={compatSavingModelId === modelId}
-                  onToggleHidden={onToggleHidden}
-                  togglingHidden={togglingModelId === modelId}
-                  onTestModel={onTestModel}
-                  testStatus={modelTestStatus?.[modelId] || null}
-                  testingModel={testingModelId === modelId}
-                />
-              );
-            })}
+            {displayModels.map(
+              ({ modelId, alias, displayName, isHidden, source, isFree, supportsVision }) => {
+                const fullModel = `${providerDisplayAlias}/${modelId}`;
+                return (
+                  <PassthroughModelRow
+                    key={`${providerStorageAlias}:${modelId}`}
+                    modelId={modelId}
+                    fullModel={fullModel}
+                    alias={alias}
+                    displayName={displayName}
+                    source={source}
+                    isFree={isFree}
+                    isHidden={isHidden}
+                    copied={copied}
+                    onCopy={onCopy}
+                    onDeleteAlias={
+                      source === "custom" || source === "manual"
+                        ? () => handleDeleteModel(modelId, alias)
+                        : source === "alias" && alias
+                          ? () => onDeleteAlias(alias)
+                          : undefined
+                    }
+                    onSetAlias={(a) => onSetAlias(modelId, a, providerStorageAlias)}
+                    t={t}
+                    showDeveloperToggle={!isAnthropic}
+                    effectiveModelNormalize={effectiveModelNormalize}
+                    effectiveModelPreserveDeveloper={effectiveModelPreserveDeveloper}
+                    getUpstreamHeadersRecord={(p) => getUpstreamHeadersRecord(modelId, p)}
+                    saveModelCompatFlags={saveModelCompatFlags}
+                    compatDisabled={compatSavingModelId === modelId}
+                    onToggleHidden={onToggleHidden}
+                    togglingHidden={togglingModelId === modelId}
+                    onTestModel={onTestModel}
+                    testStatus={modelTestStatus?.[modelId] || null}
+                    testingModel={testingModelId === modelId}
+                    provider={providerStorageAlias}
+                    supportsVision={supportsVision}
+                    maxOutputTokenOverride={outputOverrides.overrides[modelId] ?? null}
+                    onSaveMaxOutputTokenOverride={outputOverrides.save}
+                    savingOutputOverride={outputOverrides.savingModelId === modelId}
+                    contextWindowOverride={contextOverrides[modelId] ?? null}
+                    onSaveContextWindowOverride={saveContextWindowOverride}
+                    savingContextOverride={savingContextModelId === modelId}
+                  />
+                );
+              }
+            )}
           </div>
           {filteredModels.length === 0 && modelFilter && (
             <p className="py-2 text-sm text-text-muted">

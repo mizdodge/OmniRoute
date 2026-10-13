@@ -87,11 +87,15 @@ test("ClinePass fallback is the official subscription-only catalog", () => {
 test("Cline fallback owns recommended/free models and excludes the ClinePass namespace", () => {
   const ids = providerRegistry.cline.models.map((model: { id: string }) => model.id);
   assert.deepEqual(ids, [
-    "zai/glm-5.2",
+    "z-ai/glm-5.2",
     "x-ai/grok-4.5",
     "openai/gpt-5.6-sol",
     "moonshotai/kimi-k3",
     "anthropic/claude-opus-4.8",
+    "cline-free/deepseek-v4.1-flash",
+    "cline-free/mimo-v2.6-flash",
+    "cline-free/muse-spark-1.3-contributor",
+    "stealth/space-bunny-alpha",
     "openrouter/free",
     "deepseek/deepseek-v4-flash",
     "tencent/hy3:free",

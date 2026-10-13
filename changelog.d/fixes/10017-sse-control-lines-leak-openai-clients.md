@@ -1,1 +1,0 @@
-- **Passthrough streaming:** stop leaking upstream SSE control lines (`id:`/`event:`/`retry:`/`:` comments) to plain OpenAI Chat-Completions-format clients, while preserving `event:` framing for OpenAI Responses API and Claude Messages API passthrough ([#10017](https://github.com/diegosouzapw/OmniRoute/issues/10017)).

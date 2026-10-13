@@ -1,1 +1,0 @@
-- **fix(mcp):** make GitHub skill tools discoverable through `omniroute_tool_search`

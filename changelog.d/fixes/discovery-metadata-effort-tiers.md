@@ -1,1 +1,0 @@
-- fix(discovery): parse upstream reasoning tiers nested under metadata.reasoning.supported_efforts (neuralwatt /v1/models shape) so synced openai-compatible models advertise effort aliases

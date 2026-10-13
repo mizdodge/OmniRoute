@@ -9,6 +9,7 @@ import { getCachedSettings } from "@/lib/db/readCache";
 import { updateProviderConnection } from "@/lib/db/providers";
 import { resolveProviderId, WEB_COOKIE_PROVIDERS } from "@/shared/constants/providers";
 import { shouldAutoDisableBannedConnection } from "@/shared/utils/autoDisableBanned";
+import { shouldIsolateProbeFailures } from "@/shared/utils/probeOrigin";
 import * as log from "../utils/logger";
 
 /** Deactivate a connection after a permanent ban when settings and scope allow it. */
@@ -20,6 +21,15 @@ export async function maybeAutoDisableBannedAccount(input: {
   permanent?: boolean;
 }): Promise<void> {
   if (!input.permanent) return;
+  // T-PROBE: a probe-origin failure (model test-all) must never disable a
+  // connection — only a real request-path failure deactivates (#9817).
+  if (await shouldIsolateProbeFailures()) {
+    log.info(
+      "AUTH",
+      `Skipped auto-disable for ${input.connectionId.slice(0, 8)} — probe origin (permanent failure, connection stays active)`
+    );
+    return;
+  }
   try {
     const settings = await getCachedSettings();
     const scope = settings.autoDisableBannedScope;

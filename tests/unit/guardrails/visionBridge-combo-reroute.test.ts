@@ -32,7 +32,7 @@ const mappingsDb = await import("../../../src/lib/db/modelComboMappings.ts");
 
 async function resetStorage() {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
@@ -42,7 +42,7 @@ test.beforeEach(async () => {
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function createCombo(name, models, overrides = {}) {
@@ -142,6 +142,11 @@ test("decision: combo with all vision-capable targets returns 'skip'", async () 
     { provider: "anthropic", model: "anthropic/claude-sonnet-4-20250514" },
   ]);
   assert.equal(await getComboVisionBridgeDecision("vision-combo"), "skip");
+});
+
+test("decision: explicit combo/ prefix resolves the stored bare combo name", async () => {
+  await createCombo("prefixed-vision-combo", [{ provider: "openai", model: VISION_MODEL }]);
+  assert.equal(await getComboVisionBridgeDecision("combo/prefixed-vision-combo"), "skip");
 });
 
 test("decision: mixed combo (some vision, some not) returns 'process'", async () => {

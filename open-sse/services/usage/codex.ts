@@ -9,12 +9,21 @@
  */
 
 import { buildCodexUsageQuotas } from "../codexUsageQuotas.ts";
+import { getCodexBackendIdentityHeaders } from "../../config/codexClient.ts";
 import { getFieldValue } from "./scalars.ts";
 
 // Codex (OpenAI) API config
 const CODEX_CONFIG = {
   usageUrl: "https://chatgpt.com/backend-api/wham/usage",
 };
+
+type CodexUsageFetch = (input: string, init: RequestInit) => Promise<Response>;
+let codexUsageFetch: CodexUsageFetch = (input, init) => fetch(input, init);
+
+/** Test-only: replace the usage request. Pass null to restore global fetch. */
+export function setCodexUsageFetchForTests(fetchImpl: CodexUsageFetch | null): void {
+  codexUsageFetch = fetchImpl ?? ((input, init) => fetch(input, init));
+}
 
 /**
  * Codex (OpenAI) Usage - Fetch from ChatGPT backend API
@@ -36,12 +45,16 @@ export async function getCodexUsage(
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
       Accept: "application/json",
+      // Same UA/version identity chain as Codex inference (sub2api v0.1.178
+      // unified-outbound-identity): usage probes must not show up upstream as
+      // an anonymous half-identity next to the converged inference traffic.
+      ...getCodexBackendIdentityHeaders(),
     };
     if (accountId) {
       headers["chatgpt-account-id"] = accountId;
     }
 
-    const response = await fetch(CODEX_CONFIG.usageUrl, {
+    const response = await codexUsageFetch(CODEX_CONFIG.usageUrl, {
       method: "GET",
       headers,
     });
@@ -57,7 +70,7 @@ export async function getCodexUsage(
 
     const data = await response.json();
 
-    const { rateLimit, quotas, bankedResetCredits, rateLimitReachedType } =
+    const { rateLimit, quotas, bankedResetCredits, rateLimitReachedType, paidCredits } =
       buildCodexUsageQuotas(data);
 
     return {
@@ -67,6 +80,7 @@ export async function getCodexUsage(
       // Banked reset credits (display-only, eligibility-gated — issue #5199).
       // Absent for most accounts; never throws when the upstream omits it.
       ...(bankedResetCredits !== undefined ? { bankedResetCredits } : {}),
+      ...(paidCredits ? { paidCredits } : {}),
       ...(rateLimitReachedType !== undefined ? { rateLimitReachedType } : {}),
     };
   } catch (error) {

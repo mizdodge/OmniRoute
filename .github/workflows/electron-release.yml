@@ -4,12 +4,21 @@ on:
   push:
     tags:
       - "v*"
+  # A dispatch builds the ref it is dispatched ON (`gh workflow run … --ref v3.8.50` rebuilds
+  # that tag; `--ref main` builds the repaired line). The ref is deliberately NOT an input:
+  # CodeQL flags an input-controlled checkout next to the npm cache on the default branch as
+  # cache poisoning (actions/cache-poisoning/poisonable-step), and `github.ref` is trusted.
   workflow_dispatch:
     inputs:
       version:
         description: "Release version (e.g., v1.6.8)"
         required: true
         type: string
+      publish_npm:
+        description: "Also run the npm publish leg (turn off when re-attaching desktop assets to a release whose npm package already shipped)"
+        required: false
+        default: true
+        type: boolean
 
 # Least-privilege default: read-only at the top level; each job grants the writes it
 # needs (build/release upload assets, publish-npm forwards npm provenance / packages
@@ -172,6 +181,22 @@ jobs:
         env:
           NPM_CONFIG_LEGACY_PEER_DEPS: true
 
+      # The Linux leg produces x64 + arm64 installers from one x64 runner. npm
+      # deliberately installs only host-compatible optional dependencies, so
+      # hydrateNativeDeps cannot source the arm64 fork unless we fetch the exact
+      # package pinned in package-lock before either build path runs.
+      - name: Install Linux arm64 wreq binding for cross-package
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          npm install --no-save --ignore-scripts --force --legacy-peer-deps \
+            @wreq-js/binding-linux-arm64-gnu@3.2.0
+          git diff --exit-code -- package.json package-lock.json
+          mkdir -p "$RUNNER_TEMP/omniroute-wreq-verify"
+          DATA_DIR="$RUNNER_TEMP/omniroute-wreq-verify" node --import tsx/esm --test \
+            --test-name-pattern='wreq-js 3.2 manifest pins all nine' \
+            tests/unit/wreq-native-manifest.test.ts
+
       - name: Sanitize Windows home directory
         if: runner.os == 'Windows'
         shell: bash
@@ -220,9 +245,9 @@ jobs:
         #          targets, and no unlisted files) byte-for-byte.
         # hydrate: the bundle was built on ubuntu, so install-machine-forked native
         #          optionals (@img/sharp-*, @img/sharp-libvips-*, @ngrok/ngrok-*,
-        #          fsevents) carry linux forks. Replace them with the forks this
+        #          @wreq-js/binding-*, fsevents) carry linux forks. Replace them with the forks this
         #          leg's own `npm ci` resolved, then assert every bundled native
-        #          (koffi triplets, better-sqlite3 prebuilds, wreq-js, onnxruntime)
+        #          (better-sqlite3 prebuilds, wreq-js, onnxruntime)
         #          can service this leg's platform/arch before packaging starts.
         run: |
           node scripts/build/standaloneBundle.mjs restore --archive web-bundle.tar.gz
@@ -279,9 +304,14 @@ jobs:
 
       - name: Smoke packaged Electron app (Linux)
         if: matrix.platform == 'linux'
+        # #7592: also cold-restart against the same DATA_DIR and assert a
+        # native SQLite driver (not the sql.js WASM fallback) is selected on
+        # the second launch — blocking here since Linux has no Windows-style
+        # sandbox caveats that would make it flaky.
         env:
           ELECTRON_SMOKE_TIMEOUT_MS: 60000
           ELECTRON_SMOKE_STREAM_LOGS: "1"
+          ELECTRON_SMOKE_COLD_RESTART: "1"
         run: xvfb-run -a npm run electron:smoke:packaged
 
       - name: Collect installers
@@ -399,7 +429,14 @@ jobs:
           tag_name: ${{ needs.validate.outputs.version }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          # NEVER. Phase 3 of the release flow creates the GitHub Release with the curated
+          # notes seconds after pushing the tag, so by the time this step runs (1-2 h of
+          # builds later) the body already exists — and `true` APPENDS GitHub's
+          # auto-generated "What's Changed" block to it (v3.8.48 shipped that way; the
+          # v3.8.50 re-attach dispatch added +1,416 chars to a 121 KB body, run
+          # 33238093090). A curated body sits ~3 KB under the 125,000-char cap, so the
+          # append can also turn this step RED and leave the release with no assets.
+          generate_release_notes: false
           fail_on_unmatched_files: false
           files: |
             release-assets/*.dmg
@@ -457,11 +494,20 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: [validate, release]
+    # A re-dispatch that only re-attaches desktop assets must not publish the npm package again.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_npm }}
     permissions:
       # Must be `write`, not `read`: this job calls the reusable npm-publish.yml whose
       # `publish` job needs `contents: write` (gh release upload — attach the SBOM, #3874).
       # A reusable workflow's job cannot request more permission than the caller grants,
       # so a `read` here makes GitHub reject the run at startup (startup_failure).
+      #
+      # `actions: read` for the same reason: the called `publish` job downloads the next-build
+      # artefact and requests it. v3.8.50 (run 33005490476) died at startup with "The nested
+      # job 'publish' is requesting 'actions: read', but is only allowed 'actions: none'" — and
+      # because `release` lives in this same workflow, the tag shipped with ZERO assets. Keep
+      # this block a superset of every job's permissions in npm-publish.yml.
+      actions: read
       contents: write
       id-token: write # npm provenance (forwarded to the reusable workflow)
       packages: write # publish to npm.pkg.github.com

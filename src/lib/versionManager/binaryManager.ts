@@ -110,8 +110,16 @@ async function verifyChecksum(filePath: string, expectedSha256: string): Promise
   return hash.digest("hex").toLowerCase() === expectedSha256.toLowerCase();
 }
 
+/**
+ * #11236: read os.platform() at call time, never the build-foldable
+ * process.platform literal — the published-artifact build runs on Linux and
+ * constant-folds it, pruning the win32 branch so the managed binary lost its
+ * `.exe` suffix on Windows installs (same fold class as b43a212680 /
+ * #10244/#10293, which converted detectPlatform/detectArch; #10371 fixed the
+ * name in source but left this literal read behind).
+ */
 function managedBinaryName(): string {
-  return process.platform === "win32" ? "cliproxyapi.exe" : "cliproxyapi";
+  return os.platform() === "win32" ? "cliproxyapi.exe" : "cliproxyapi";
 }
 
 function findBinaryInDir(dir: string): string | null {

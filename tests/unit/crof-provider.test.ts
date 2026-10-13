@@ -57,20 +57,15 @@ test("CrofAI seed list covers every live reasoning-capable model id", () => {
   // Regression guard: every model the live /v1/models roster flags with
   // `reasoning_effort: true` must have a seed entry with effort tiers, so a
   // stale synced cache never silently drops their effort aliases. Snapshot of
-  // GET https://crof.ai/v1/models (2026-08-10) — update deliberately when the
-  // roster changes.
+  // GET https://crof.ai/v1/models (2026-08-19; #10577 removed 10 retired ids
+  // no longer served live) — update deliberately when the roster changes.
   const liveReasoningIds = [
     "deepseek-v4-flash",
     "deepseek-v4-flash-0731",
     "deepseek-v4-pro",
-    "deepseek-v4-pro-lightning",
     "gemma-4-31b-it",
-    "glm-4.7",
-    "glm-4.7-flash",
     "glm-5.1",
     "glm-5.2",
-    "kimi-k2.5",
-    "kimi-k2.5-lightning",
     "kimi-k2.6",
     "kimi-k2.7-code",
     "kimi-k3",

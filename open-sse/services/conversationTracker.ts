@@ -31,7 +31,7 @@
  * @see Issue: X-ConversationId / agentic conversation tracking
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import {
   createAgenticConversation,
   findAgenticConversationsByFingerprint,
@@ -77,7 +77,7 @@ export interface ResolveConversationIdInput {
 }
 
 export interface ResolveConversationIdResult {
-  conversationId: string;
+  conversationId: string | null;
   isNewConversation: boolean;
 }
 
@@ -200,8 +200,10 @@ export function extractCanonicalTurns(body: JsonRecord | null | undefined): Cano
 
 // ── Fingerprint (identity, O(1) regardless of history size) ─────────────
 
+// Content fingerprint for conversation identity, not a password/credential hash — keyed with a
+// fixed context label so it reads as a domain-separated digest rather than a bare password hash.
 function hashHex(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
+  return createHmac("sha256", "omniroute-conversation-fingerprint-v1").update(text).digest("hex");
 }
 
 function extractToolNames(body: JsonRecord | null | undefined): string[] {
@@ -263,8 +265,20 @@ export function hashTurnContent(turn: CanonicalTurn): string {
   return hashHex(`${turn.role} ${turn.text}`);
 }
 
-function chainNodeId(parentId: string, turn: CanonicalTurn): string {
-  return hashHex(`${parentId} ${hashTurnContent(turn)}`);
+/**
+ * Upper bound on chain-node id computations a single resolveConversationId
+ * call may spend across ALL fingerprint candidates, start turns and duplicate
+ * anchors (#7847-class stall). Real coding-agent histories combine 1000+
+ * turns with heavily duplicated tool outputs, so the (start × anchor × walk)
+ * product is unbounded without a cap: measured on production traffic the
+ * walk blocked the request path for 10-130 s before this bound existed.
+ * Exhausting the budget degrades exactly like a no-match — the request mints
+ * a new conversation — never a wrong attachment.
+ */
+export const DEFAULT_RECONNECT_MAX_STEPS = 150_000;
+
+function chainNodeIdFromHash(parentId: string, turnHash: string): string {
+  return hashHex(`${parentId} ${turnHash}`);
 }
 
 interface NewTurnNode {
@@ -279,27 +293,28 @@ function buildNewNodes(
   turns: CanonicalTurn[],
   fromIndex: number,
   chainAnchor: string,
-  rootId: string
+  rootId: string,
+  turnHashes?: string[]
 ): NewTurnNode[] {
   const nodes: NewTurnNode[] = [];
   let parent = chainAnchor;
   for (let i = fromIndex; i < turns.length; i++) {
-    const turn = turns[i];
-    const nodeId = chainNodeId(parent, turn);
+    const turnHash = turnHashes ? turnHashes[i] : hashTurnContent(turns[i]);
+    const nodeId = chainNodeIdFromHash(parent, turnHash);
     nodes.push({
       id: nodeId,
       // The root anchor is a hashing seed, not a real node — the first turn
       // of a tree has no parent turn.
       parentId: parent === rootId ? null : parent,
-      role: turn.role,
-      contentHash: hashTurnContent(turn),
+      role: turns[i].role,
+      contentHash: turnHash,
     });
     parent = nodeId;
   }
   return nodes;
 }
 
-interface ReconnectMatch {
+export interface ReconnectMatch {
   /** Index into `chainTurns` where the reconnection was found (turns before
    * this index were dropped from the chain's view — a compacted summary the
    * client sent instead of resending them verbatim — and are not inserted
@@ -314,6 +329,30 @@ interface ReconnectMatch {
    * DIFFERENT turn rather than simply being new. See resolveConversationId's
    * doc comment for what this distinction now controls. */
   anchorHasChild: boolean;
+}
+
+/**
+ * Mutable work budget shared across a single resolveConversationId call's
+ * candidate walks. `stepsLeft` counts DOWN one chain-node id computation per
+ * step; `stepsUsed` reports total spend for observability/tests.
+ */
+export interface ReconnectWalkBudget {
+  stepsLeft: number;
+  stepsUsed: number;
+}
+
+export interface FindReconnectMatchOptions {
+  /** Memoized `hashTurnContent` per chain turn, computed once per request. */
+  turnHashes?: string[];
+  /** Per-call cap; omit to use a fresh DEFAULT_RECONNECT_MAX_STEPS budget. */
+  maxSteps?: number;
+  /** Shared budget across several calls (resolveConversationId's candidate loop). */
+  budget?: ReconnectWalkBudget;
+}
+
+export interface FindReconnectMatchResult {
+  match: ReconnectMatch | null;
+  stepsUsed: number;
 }
 
 /**
@@ -343,21 +382,44 @@ interface ReconnectMatch {
  * candidate anchor for every prefix start is now tried, and the one that
  * verifiably extends furthest into the actual request wins — the only
  * reliable signal of genuine continuation when content repeats.
+ *
+ * #7847-class stall fix: the (start × anchor × walk) product over a long
+ * duplicate-heavy history is bounded by a step budget (`maxSteps` /
+ * `DEFAULT_RECONNECT_MAX_STEPS`), and turn content hashes are memoized via
+ * `turnHashes` so each step hashes ~130 fixed-size bytes instead of re-hashing
+ * the turn's full text. Budget exhaustion returns the best match verified so
+ * far (possibly none) — degrading to "new conversation" downstream, never an
+ * unverified attachment.
  */
-function findReconnectMatch(
+export function findReconnectMatch(
   chainTurns: CanonicalTurn[],
-  index: ConversationTurnIndex
-): ReconnectMatch | null {
+  index: ConversationTurnIndex,
+  options: FindReconnectMatchOptions = {}
+): FindReconnectMatchResult {
+  const turnHashes = options.turnHashes ?? chainTurns.map(hashTurnContent);
+  const budget: ReconnectWalkBudget = options.budget ?? {
+    stepsLeft: options.maxSteps ?? DEFAULT_RECONNECT_MAX_STEPS,
+    stepsUsed: 0,
+  };
   let best: ReconnectMatch | null = null;
 
   for (let s = 0; s < chainTurns.length; s++) {
-    const anchors = index.byContentHash.get(hashTurnContent(chainTurns[s]));
+    if (budget.stepsLeft <= 0) break;
+    const anchors = index.byContentHash.get(turnHashes[s]);
     if (!anchors) continue;
     for (const anchorNodeId of anchors) {
+      if (budget.stepsLeft <= 0) break;
+      // The anchor claim itself costs one step: with no budget left to claim
+      // even the hash-bucket anchor, the walker must report no match rather
+      // than an unverified one.
+      budget.stepsLeft -= 1;
+      budget.stepsUsed += 1;
       let parent = anchorNodeId;
       let matchEndIndex = s + 1;
-      for (let i = s + 1; i < chainTurns.length; i++) {
-        const nodeId = chainNodeId(parent, chainTurns[i]);
+      while (matchEndIndex < chainTurns.length && budget.stepsLeft > 0) {
+        budget.stepsLeft -= 1;
+        budget.stepsUsed += 1;
+        const nodeId = chainNodeIdFromHash(parent, turnHashes[matchEndIndex]);
         if (!index.nodeIds.has(nodeId)) break;
         parent = nodeId;
         matchEndIndex++;
@@ -378,10 +440,12 @@ function findReconnectMatch(
         best = { startIndex: s, matchEndIndex, anchorNodeId: parent, anchorHasChild };
       }
       // Can't do better than matching every turn through to the end.
-      if (matchEndIndex === chainTurns.length) return best;
+      if (best && best.matchEndIndex === chainTurns.length) {
+        return { match: best, stepsUsed: budget.stepsUsed };
+      }
     }
   }
-  return best;
+  return { match: best, stepsUsed: budget.stepsUsed };
 }
 
 // ── Orchestration ─────────────────────────────────────────────────────────
@@ -391,6 +455,10 @@ const MAX_STORED_ID_LENGTH = 128;
 export async function resolveConversationId(
   input: ResolveConversationIdInput
 ): Promise<ResolveConversationIdResult> {
+  if (process.env.OMNIROUTE_DISABLE_CONVERSATION_TRACKING === "1") {
+    return { conversationId: null, isNewConversation: false };
+  }
+
   // Client override wins outright — deterministic, zero heuristic risk.
   // Same header feature #8249 already reads (chatCore.ts); we don't invent a
   // new prefix so the existing header's contract/format stays unchanged.
@@ -415,13 +483,23 @@ export async function resolveConversationId(
   // it sits) fail to match on every request — reintroducing the exact
   // always-new-conversation bug this chain design exists to fix.
   const chainTurns = turns.filter((t) => t.role !== "system");
+  // #7847-class stall fix: hash each turn's content exactly once per request
+  // and bound the reconnect walk across ALL candidates with one shared budget
+  // — previously every (start × anchor × walk-step) re-hashed the turn's full
+  // text twice, which on long duplicate-heavy coding-agent histories blocked
+  // the pre-routing request path for 10-130 s.
+  const turnHashes = chainTurns.map(hashTurnContent);
+  const walkBudget: ReconnectWalkBudget = { stepsLeft: DEFAULT_RECONNECT_MAX_STEPS, stepsUsed: 0 };
 
   const candidates = findAgenticConversationsByFingerprint(fingerprintHash);
   for (const candidate of candidates) {
     const index = getConversationTurnIndex(candidate.id);
     if (index.nodeIds.size === 0) continue;
 
-    const match = findReconnectMatch(chainTurns, index);
+    const { match } = findReconnectMatch(chainTurns, index, {
+      turnHashes,
+      budget: walkBudget,
+    });
     // No match anywhere in the chain means this candidate isn't actually
     // this conversation's lineage — it only shares the coarse fingerprint
     // bucket (apiKeyId/model/toolNames), which real traffic proves is not
@@ -449,7 +527,8 @@ export async function resolveConversationId(
         chainTurns,
         match.matchEndIndex,
         match.anchorNodeId,
-        candidate.id
+        candidate.id,
+        turnHashes
       );
       insertConversationTurnNodes(candidate.id, input.correlationId, newNodes);
       updateAgenticConversation(candidate.id, { turnCount: candidate.turnCount + 1 });
@@ -477,6 +556,10 @@ export async function resolveConversationId(
 
   const id = `conv_${randomUUID()}`;
   createAgenticConversation({ id, apiKeyId: input.apiKeyId, fingerprintHash });
-  insertConversationTurnNodes(id, input.correlationId, buildNewNodes(chainTurns, 0, id, id));
+  insertConversationTurnNodes(
+    id,
+    input.correlationId,
+    buildNewNodes(chainTurns, 0, id, id, turnHashes)
+  );
   return { conversationId: id, isNewConversation: true };
 }

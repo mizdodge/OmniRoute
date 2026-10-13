@@ -1,1 +1,0 @@
-- **feat(settings):** add `autoDisableBannedScope` so permanent-ban auto-disable can target subscription/OAuth accounts only, leaving prepaid API keys in the routing pool ([#10617](https://github.com/diegosouzapw/OmniRoute/pull/10617))

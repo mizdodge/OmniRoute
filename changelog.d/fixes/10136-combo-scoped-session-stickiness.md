@@ -1,1 +1,0 @@
-- **fix(combo):** scope session-stickiness bindings to their owning Combo so identical first messages cannot carry a successful target into another priority chain and bypass its configured order (fixes #10136)

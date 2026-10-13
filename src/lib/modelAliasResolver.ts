@@ -10,10 +10,20 @@
  */
 import { getModelAliases } from "@/lib/db/models/aliases";
 import { DEFAULT_MODEL_ALIAS_SEED } from "@/lib/modelAliasSeed";
+import { getComboByName } from "@/lib/db/combos";
+import { getModelIsHidden } from "@/lib/db/models";
+import { resolveProviderId } from "@/shared/constants/providers";
 
 let cachedAliases: Record<string, unknown> | null = null;
 let lastFetch = 0;
 const CACHE_TTL_MS = 60_000; // 1 minute
+
+function isTargetModelHidden(provider: string, modelId: string): boolean {
+  if (getModelIsHidden(provider, modelId)) return true;
+  const canonicalProvider = resolveProviderId(provider);
+  if (canonicalProvider !== provider && getModelIsHidden(canonicalProvider, modelId)) return true;
+  return false;
+}
 
 async function loadAliases(): Promise<Record<string, unknown>> {
   const now = Date.now();
@@ -40,21 +50,52 @@ export async function resolveModelAliasWithSeedFallback(
 ): Promise<string | null | undefined> {
   if (!model) return model;
 
+  // Combo routing takes precedence over individual model aliases (#10124 / #9020)
+  if (model.startsWith("combo/")) return model;
+  const existingCombo = await getComboByName(model).catch(() => null);
+  if (existingCombo) return model;
+
   const aliases = await loadAliases();
   const target = aliases[model] ?? (DEFAULT_MODEL_ALIAS_SEED as Record<string, unknown>)[model];
 
   if (target === undefined) return model;
 
-  if (typeof target === "string") return target;
+  if (typeof target === "string") {
+    const slashIndex = target.indexOf("/");
+    if (slashIndex > 0) {
+      const targetProvider = target.slice(0, slashIndex);
+      const targetModel = target.slice(slashIndex + 1);
+      if (isTargetModelHidden(targetProvider, targetModel)) {
+        return model;
+      }
+    }
+    return target;
+  }
 
   if (Array.isArray(target) && target.length > 0) {
     const first = target[0];
-    return typeof first === "string" ? first : model;
+    if (typeof first === "string") {
+      const slashIndex = first.indexOf("/");
+      if (slashIndex > 0) {
+        const targetProvider = first.slice(0, slashIndex);
+        const targetModel = first.slice(slashIndex + 1);
+        if (isTargetModelHidden(targetProvider, targetModel)) {
+          return model;
+        }
+      }
+      return first;
+    }
+    return model;
   }
 
   if (typeof target === "object" && target !== null) {
     const t = target as { provider?: string; model?: string };
-    if (t.provider && t.model) return `${t.provider}/${t.model}`;
+    if (t.provider && t.model) {
+      if (isTargetModelHidden(t.provider, t.model)) {
+        return model;
+      }
+      return `${t.provider}/${t.model}`;
+    }
   }
 
   return model;

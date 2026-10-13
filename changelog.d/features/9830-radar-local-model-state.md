@@ -1,1 +1,0 @@
-- **feat(radar):** Persist local model display-name/enabled overrides and hide/restore tombstones, with authenticated catalog controls and feed safety precedence ([#9830](https://github.com/diegosouzapw/OmniRoute/pull/9830))

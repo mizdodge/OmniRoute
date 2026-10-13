@@ -30,20 +30,62 @@ export type ProviderErrorRule = {
 export type ProviderErrorRuleMatch = {
   reason: ConfiguredErrorReason;
   /**
-   * Intended lock scope. #10334: this field is CONSUMED end-to-end only for
-   * providers in `HONORS_RULE_LOCK_SCOPE_PROVIDERS` (agentrouter-exclusive
-   * today, gated by `honorsRuleLockScope()`) — for those, `checkFallbackError`
-   * surfaces it as `ruleScope` on its return value for the persistence layer
-   * to honor instead of re-deriving scope from `hasPerModelQuota()`. For
-   * every other provider it remains INFORMATIONAL: `getProviderErrorRuleMatch`
-   * callers still read only `reason`/`cooldownMs`, and the actual lock scope
-   * is decided independently by each call site. Widening the allowlist is
-   * tracked as a follow-up — see `docs/architecture/RESILIENCE_GUIDE.md` §7.
+   * Intended lock scope. #10334: for a BUILT-IN catalog rule, this field is
+   * CONSUMED end-to-end only for providers in `HONORS_RULE_LOCK_SCOPE_PROVIDERS`
+   * (agentrouter + the opencode family, gated by `honorsRuleLockScope()`) — for
+   * `checkFallbackError` surfaces it as `ruleScope` on its return value for the
+   * persistence layer to honor instead of re-deriving scope from
+   * `hasPerModelQuota()`. For every other built-in-rule provider it remains
+   * INFORMATIONAL. #11104: an OPERATOR-declared rule (`OperatorProviderErrorRule`)
+   * is exempt from this allowlist — `honorsRuleLockScope()` always returns true
+   * when the provider has one, since the operator already opted in by declaring
+   * the rule. Widening `HONORS_RULE_LOCK_SCOPE_PROVIDERS` itself (for a new
+   * built-in catalog rule) is tracked as a follow-up — see
+   * `docs/architecture/RESILIENCE_GUIDE.md` §7.
    */
   scope: "model" | "provider" | "connection";
   /** Optional explicit cooldown; falls back to the existing per-reason defaults. */
   cooldownMs?: number;
 };
+
+/**
+ * Operator-declared per-provider error rule (settings-driven).
+ *
+ * Mirrors the catalog `ProviderErrorRule` but is data-only so an operator can
+ * add a scope/cooldown/reason override for a provider without editing this
+ * file. `match` is a plain case-insensitive SUBSTRING of the error body — never
+ * a RegExp — so an operator-supplied pattern can never introduce a ReDoS on the
+ * error-classification hot path. Bounded to <= 50 rules total by the settings
+ * schema. An operator rule is consulted BEFORE the built-in `providerRuleRegistry`
+ * and wins on the first status+substring match for a provider.
+ */
+export type OperatorProviderErrorRule = {
+  status: number;
+  match: string;
+  scope: "model" | "provider" | "connection";
+  reason?: ConfiguredErrorReason;
+  cooldownMs?: number;
+};
+
+let operatorProviderErrorRules: Record<string, OperatorProviderErrorRule[]> = {};
+
+/**
+ * Inject operator-declared rules. Called from the runtime-settings applier
+ * (`applyRuntimeSettings`) once at boot and on every settings update, with the
+ * value validated by the settings schema. Pass `undefined`/empty/null to clear.
+ * Provider keys are lowercased so lookups are case-insensitive.
+ */
+export function setOperatorProviderErrorRules(
+  rules: Record<string, OperatorProviderErrorRule[]> | undefined | null
+): void {
+  operatorProviderErrorRules = {};
+  if (!rules) return;
+  for (const [provider, list] of Object.entries(rules)) {
+    if (Array.isArray(list) && list.length > 0) {
+      operatorProviderErrorRules[provider.toLowerCase()] = list;
+    }
+  }
+}
 
 // ─── Opencode ───────────────────────────────────────────────────────────────────
 // Opencode Go uses an account-wide quota. The body usually says "rate limit
@@ -53,13 +95,32 @@ export type ProviderErrorRuleMatch = {
 // every model on the same provider until the 5h window resets.
 //
 // Scope note: `scope: "connection"` (not "provider") is correct because the
-// upstream quota is per-account, and a single OmniRoute provider entry maps to
-// one user account. Multiple OmniRoute connections under the same provider
-// name mean the user has multiple upstream accounts — locking at the provider
-// level would disable every one of them when only one is exhausted. See
-// Issue #2 (Monthly quota exhausted treated as transient 429).
+// upstream quota is per egress IP for the free tier (the opencode free tier
+// is IP-bucketed, not account-bucketed — see #9611) and per account for paid
+// plans; a single OmniRoute provider entry maps to one user account. Multiple
+// OmniRoute connections under the same provider name mean the user has
+// multiple upstream accounts — locking at the provider level would disable
+// every one of them when only one is exhausted. See Issue #2 (Monthly quota
+// exhausted treated as transient 429) and #10880 (egress-bucketed cooldown).
 function buildOpencodeRules(): ProviderErrorRule[] {
   return [
+    {
+      // A 400/429 reading "endpoint is unavailable" fails over to a short model-scope
+      // cooldown so the next request skips the refused model instead of
+      // retrying it. First: the body marker is the most specific signal and
+      // wins over the generic header/counter rules below on conflicts.
+      id: "opencode-endpoint-unavailable",
+      match: ({ status, body }) => {
+        if (status !== 400 && status !== 429) return null;
+        const text = JSON.stringify(body ?? "").toLowerCase();
+        if (!text.includes("endpoint is unavailable")) return null;
+        return {
+          reason: "model_capacity",
+          scope: "model",
+          cooldownMs: 300_000,
+        };
+      },
+    },
     {
       id: "opencode-monthly-quota-resets-in",
       match: ({ status, body }) => {
@@ -109,6 +170,19 @@ function buildOpencodeRules(): ProviderErrorRule[] {
           return { reason: "quota_exhausted", scope: "connection" };
         }
         return null;
+      },
+    },
+    {
+      id: "opencode-400-model-unavailable",
+      match: ({ status, body }) => {
+        if (status !== 400) return null;
+        const text = JSON.stringify(body ?? "").toLowerCase();
+        if (!text.includes("upstream request failed: model is unavailable.")) return null;
+        return {
+          reason: "model_capacity",
+          scope: "model",
+          cooldownMs: 3_600_000,
+        };
       },
     },
   ];
@@ -246,15 +320,16 @@ function buildAgentrouterRules(): ProviderErrorRule[] {
   ];
 }
 
+/** Providers sharing the opencode upstream envelope, hence the opencode catalog rules. */
+const OPENCODE_RULE_FAMILY = ["opencode", "opencode-zen", "opencode-go", "opencode-cli"];
+
 /**
  * Global registry. Provider name → ordered list of rules (first match wins).
  * Add new providers here; the matcher in classifyError will pick them up
  * automatically.
  */
 export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
-  ["opencode", buildOpencodeRules()],
-  ["opencode-go", buildOpencodeRules()],
-  ["opencode-cli", buildOpencodeRules()],
+  ...OPENCODE_RULE_FAMILY.map((id): [string, ProviderErrorRule[]] => [id, buildOpencodeRules()]),
   ["minimax", buildMinimaxRules()],
   ["minimax-passthrough", buildMinimaxRules()],
   ["cloudflare-ai", buildCloudflareAiRules()],
@@ -270,36 +345,135 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
  * FULL_TEXT_RULE_PROVIDERS: that set controls what body a rule matches against
  * (input), this one controls whether the matched scope changes caller behavior
  * (output). A provider could need one without the other.
+ *
+ * Providers with an operator-declared rule (`setOperatorProviderErrorRules`)
+ * are honored too, without being added here: the allowlist exists to gate
+ * BUILT-IN catalog rules, which change default behavior for every operator
+ * running that provider — an operator rule is already an explicit, per-operator
+ * opt-in, so gating it a second time behind this list would make the settings
+ * mechanism (#11104) silently inert for every provider except the ones listed
+ * below. See `hasOperatorRuleForProvider`.
  */
-const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter"]);
+const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", ...OPENCODE_RULE_FAMILY]);
 
 export function honorsRuleLockScope(provider: string | null | undefined): boolean {
-  return !!provider && HONORS_RULE_LOCK_SCOPE_PROVIDERS.has(provider.toLowerCase());
+  if (!provider) return false;
+  const key = provider.toLowerCase();
+  return HONORS_RULE_LOCK_SCOPE_PROVIDERS.has(key) || hasOperatorRuleForProvider(key);
 }
 
 /**
- * Providers whose rules match on the FULL upstream error text.
- * checkFallbackError's rule lookup normally passes only the structured
+ * Providers whose upstream quota is bucketed by EGRESS IP, not by account —
+ * the opencode free tier is IP-bucketed, not account-bucketed (see #9611).
+ * When such a provider answers 429 quota_exhausted or
+ * rate_limit_exceeded (see the markAccountUnavailable branch comment — the
+ * real opencode 429 arrives as rate_limit_exceeded on that path), every
+ * connection egressing through that IP shares the exhausted budget, so the
+ * lock is applied at egress-IP scope (see markAccountUnavailable /
+ * applyEgressIpLockout). EXCLUSIVE allowlist by design — same pattern as
+ * HONORS_RULE_LOCK_SCOPE_PROVIDERS (#10334): a provider must opt in, and any
+ * widening is an explicit owner decision.
+ */
+// Default free-tier set (#9611). PAID plans are account-bucketed, not
+// IP-bucketed, so operators running paid subscriptions can disable or trim
+// the egress-IP lockout via OMNIROUTE_EGRESS_IP_LOCK_PROVIDERS:
+//   unset            → default set below (free-tier behavior)
+//   none/off/false/0 → empty set (egress-IP lockout fully disabled)
+//   "a,b,c"          → exact replacement set
+// Static default as a plain lookup table; the runtime set is env-derived
+// (dynamic membership), so a Set is the right structure there.
+const EGRESS_BUCKETED_LOCK_PROVIDERS_DEFAULT: Record<string, true> = {
+  opencode: true,
+  "opencode-go": true,
+  "opencode-cli": true,
+};
+
+/**
+ * Pure parser for OMNIROUTE_EGRESS_IP_LOCK_PROVIDERS (exported for tests).
+ * Returns the effective provider set: default free-tier family when unset,
+ * empty for none/off/false/0, otherwise the comma-separated replacement set.
+ */
+export function egressIpLockProvidersFromEnv(
+  raw: string | undefined,
+  fallback: Record<string, true> = EGRESS_BUCKETED_LOCK_PROVIDERS_DEFAULT
+): Set<string> {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed === "") return new Set(Object.keys(fallback));
+  if (/^(none|off|false|0)$/i.test(trimmed)) return new Set<string>();
+  return new Set(
+    trimmed
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+const EGRESS_BUCKETED_LOCK_PROVIDERS = egressIpLockProvidersFromEnv(
+  process.env.OMNIROUTE_EGRESS_IP_LOCK_PROVIDERS
+);
+
+export function isEgressBucketedLockScope(provider: string | null | undefined): boolean {
+  return !!provider && EGRESS_BUCKETED_LOCK_PROVIDERS.has(provider.toLowerCase());
+}
+
+/**
+ * The same allowlist as a sorted array, for callers that must express it as
+ * data rather than a predicate (the sibling lookup in `applyEgressIpLockout`
+ * binds it into a SQL `IN (...)`). Single source of truth on purpose: a
+ * literal provider list duplicated in a query would silently NOT follow a
+ * widening of `EGRESS_BUCKETED_LOCK_PROVIDERS`, leaving the opt-in half
+ * applied.
+ */
+export function egressBucketedLockProviders(): string[] {
+  return [...EGRESS_BUCKETED_LOCK_PROVIDERS].sort();
+}
+
+/**
+ * Providers whose BUILT-IN catalog rules match on the FULL upstream error
+ * text. checkFallbackError's rule lookup normally passes only the structured
  * error ({code, type} — message stripped by the combo callers), which is
  * enough for header/status/code rules but blind to body-text markers like
  * agentrouter's "额度不足". Providers in this set get the raw error text as
  * the match body instead. EXCLUSIVE allowlist by owner decision (2026-08-13):
  * adding a provider here is an explicit opt-in — the default path for every
  * other provider must remain byte-for-byte unchanged.
+ *
+ * Operator-declared rules bypass this allowlist entirely (see
+ * `hasOperatorRuleForProvider`): the operator's `match` is a literal substring
+ * of the error body by construction, so a rule that never sees body text could
+ * never match anything, defeating the point of declaring it.
  */
 const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter"]);
 
 /**
+ * True when an operator has declared at least one rule for this provider via
+ * `settings.providerErrorRules` (injected through `setOperatorProviderErrorRules`).
+ * Presence of the rule IS the opt-in — no separate allowlist to maintain, and
+ * no widening decision needed as new operators configure new providers.
+ */
+export function hasOperatorRuleForProvider(provider: string | null | undefined): boolean {
+  if (!provider) return false;
+  const rules = operatorProviderErrorRules[provider.toLowerCase()];
+  return !!rules && rules.length > 0;
+}
+
+/**
  * Resolve the body handed to getProviderErrorRuleMatch inside
- * checkFallbackError: full error text for FULL_TEXT_RULE_PROVIDERS,
- * the structured error for everyone else.
+ * checkFallbackError: full error text for FULL_TEXT_RULE_PROVIDERS or any
+ * provider with an operator-declared rule, the structured error for everyone
+ * else.
  */
 export function resolveRuleMatchBody(
   provider: string | null | undefined,
   structuredError: unknown,
   errorText: string | null | undefined
 ): unknown {
-  if (provider && FULL_TEXT_RULE_PROVIDERS.has(provider.toLowerCase()) && errorText) {
+  if (
+    provider &&
+    (FULL_TEXT_RULE_PROVIDERS.has(provider.toLowerCase()) ||
+      hasOperatorRuleForProvider(provider)) &&
+    errorText
+  ) {
     return errorText;
   }
   return structuredError ?? null;
@@ -314,10 +488,32 @@ export function getProviderErrorRuleMatch(
   provider: string | null | undefined,
   status: number,
   headers: Headers | Record<string, string> | null | undefined,
-  body?: unknown
+  body?: unknown,
+  operatorRules?: Record<string, OperatorProviderErrorRule[]>
 ): ProviderErrorRuleMatch | null {
   if (!provider) return null;
-  const rules = providerRuleRegistry.get(provider.toLowerCase());
+  const key = provider.toLowerCase();
+
+  // Operator-declared rules win first: an operator can override any catalog
+  // rule for a provider without editing this file. `operatorRules` is the
+  // injected source (tests / direct callers); when omitted we fall back to the
+  // settings-backed cache populated by `setOperatorProviderErrorRules`.
+  const opRules = (operatorRules ?? operatorProviderErrorRules)?.[key];
+  if (opRules && opRules.length > 0) {
+    const text = typeof body === "string" ? body : JSON.stringify(body ?? "");
+    const lowered = text.toLowerCase();
+    for (const r of opRules) {
+      if (r.status === status && lowered.includes(r.match.toLowerCase())) {
+        return {
+          reason: r.reason ?? "quota_exhausted",
+          scope: r.scope,
+          cooldownMs: r.cooldownMs,
+        };
+      }
+    }
+  }
+
+  const rules = providerRuleRegistry.get(key);
   if (!rules) return null;
   // Normalize headers: accept either a `Headers` object (from `fetch()`) or
   // a plain record. Provider rules access headers via plain object indexing.
@@ -379,4 +575,26 @@ export function parseResetCountdownMs(text: string): number | null {
     default:
       return null;
   }
+}
+
+/**
+ * Opencode-family "Upstream request failed: Model is unavailable." 400/429: the rule's
+ * model-scope match, or null for any other provider, status or rule. Takes the raw
+ * error text so it stays independent of FULL_TEXT_RULE_PROVIDERS (#10880).
+ */
+export function getOpencodeModelUnavailableMatch(
+  provider: string | null | undefined,
+  status: number,
+  headers: Headers | Record<string, string> | null | undefined,
+  errorText: unknown
+): ProviderErrorRuleMatch | null {
+  if (
+    (status !== 400 && status !== 429) ||
+    !provider ||
+    !OPENCODE_RULE_FAMILY.includes(provider.toLowerCase())
+  ) {
+    return null;
+  }
+  const match = getProviderErrorRuleMatch(provider, status, headers, errorText);
+  return match?.scope === "model" && match.reason === "model_capacity" ? match : null;
 }

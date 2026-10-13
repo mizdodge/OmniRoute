@@ -1,1 +1,0 @@
-- fix(ci): make `Build (advisory)` produce a signal again — pinned to a hosted runner with the swap/heap provisioning `Fast Production Build` proves sufficient, and scoped to fork PRs, which are the only ones `build.yml` cannot cover (72 of the last 100 PRs into `release/**`)

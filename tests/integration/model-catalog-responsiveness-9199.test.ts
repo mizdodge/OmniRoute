@@ -19,7 +19,7 @@ const healthRoute = await import("../../src/app/api/health/ping/route.ts");
 async function resetStorage() {
   core.resetDbInstance();
   apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   modelsCatalog.__resetCatalogBuilderRunsForTest();
 }
@@ -30,7 +30,7 @@ test.beforeEach(async () => {
 
 test.after(async () => {
   await resetStorage();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test(
@@ -41,6 +41,16 @@ test(
       requireLogin: true,
       requireAuthForModels: true,
       password: "",
+    });
+    // Auto-combos are published only when they have an eligible connected target.
+    await providersDb.createProviderConnection({
+      provider: "openai",
+      authType: "apikey",
+      name: "openai-catalog-heartbeat-9199",
+      apiKey: "sk-catalog-heartbeat-fixture",
+      isActive: true,
+      testStatus: "active",
+      providerSpecificData: {},
     });
     const apiKey = await apiKeysDb.createApiKey("catalog responsiveness", "machine-9199");
 

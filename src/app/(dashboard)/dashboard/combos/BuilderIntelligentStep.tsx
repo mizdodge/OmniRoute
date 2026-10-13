@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import Card from "@/shared/components/Card";
 import {
   DEFAULT_INTELLIGENT_WEIGHTS,
+  applyIntelligentRoutingConfigPatch,
   FACTOR_LABELS,
   MODE_PACK_OPTIONS,
   ROUTER_STRATEGY_OPTIONS,
@@ -20,7 +21,7 @@ function getI18nOrFallback(
   t: any,
   key: string,
   fallback: string,
-  values?: Record<string, string | number>
+  values?: Record<string, unknown>
 ) {
   if (typeof t?.has === "function" && t.has(key)) return t(key, values);
   return fallback;
@@ -239,14 +240,7 @@ export default function BuilderIntelligentStep({
   );
 
   const updateConfig = (patch: Record<string, unknown>) => {
-    onChange({
-      ...normalizedConfig,
-      ...patch,
-      weights: {
-        ...normalizedConfig.weights,
-        ...((patch.weights as Record<string, number>) || {}),
-      },
-    });
+    onChange(applyIntelligentRoutingConfigPatch(config, patch));
   };
 
   const updateRoleWeight = (

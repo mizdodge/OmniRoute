@@ -20,7 +20,7 @@ function at(seconds: number): string {
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("hashes canonical owners and never persists the raw owner", () => {
@@ -61,6 +61,19 @@ test("uses the live next-free migration slot without runner compatibility specia
 });
 
 test("enforces global active owner and connection uniqueness", () => {
+  // Establish the OWNER_A/conn-a lease this test reuses, rather than depending
+  // on a lease left behind by an earlier test in the file. The DB instance is
+  // shared across tests (reset only in test.after), so relying on prior state
+  // makes this test order-dependent: run in isolation the re-acquire below
+  // returns ACQUIRED instead of REUSED.
+  leases.acquireExclusiveConnectionLease({
+    leaseOwnerId: OWNER_A,
+    apiKeyId: "key-a",
+    provider: "codex",
+    connectionId: "conn-a",
+    now: at(0),
+  });
+
   const ownerA = leases.acquireExclusiveConnectionLease({
     leaseOwnerId: OWNER_A,
     apiKeyId: "key-a",
@@ -450,6 +463,6 @@ test("cross-process contenders never both acquire the same connection", async ()
     assert.equal(results.filter((result) => result.kind === "ACQUIRED").length, 1);
     assert.equal(results.filter((result) => result.kind === "CONNECTION_BUSY").length, 1);
   } finally {
-    fs.rmSync(raceDir, { recursive: true, force: true });
+    fs.rmSync(raceDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

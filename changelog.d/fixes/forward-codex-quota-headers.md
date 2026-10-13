@@ -1,1 +1,0 @@
-- **fix(sse):** keep Codex/Anthropic quota headers under the upstream forwarding budget; drop `x-codex-turn-state` and raise the 768-byte cap (`open-sse/handlers/chatCore/responseHeaders.ts`)

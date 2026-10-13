@@ -9,11 +9,18 @@
  * collide via delimiter composition.
  */
 import { listModelCapabilityOverrides } from "@/lib/db/modelCapabilityOverrides";
+import type { ReasoningEffortOverrideValue } from "@/shared/reasoning/reasoningEffortsOverride";
 import { listModelContextOverrides } from "@/lib/db/modelContextOverrides";
+import {
+  listModelCompatVisionOverrides,
+  type ModelCompatVisionOverrideMap,
+} from "@/lib/db/models/compat";
 import {
   listCustomModelVisionOverrides,
   type CustomModelVisionOverrideMap,
   type CustomModelVisionOverrideReadOptions,
+  listSyncedAvailableModelVision,
+  type SyncedAvailableModelVisionMap,
 } from "@/lib/db/models";
 import {
   loadAllSyncedCapabilitiesUncached,
@@ -22,13 +29,21 @@ import {
 
 /** Nested provider → model → numeric override map (collision-free). */
 export type NestedOverrideMap = ReadonlyMap<string, ReadonlyMap<string, number>>;
+export type NestedReasoningEffortsOverrideMap = ReadonlyMap<
+  string,
+  ReadonlyMap<string, readonly ReasoningEffortOverrideValue[]>
+>;
 
 export interface ModelCapabilityResolutionSnapshot {
   readonly synced: CapabilitiesByProvider;
   readonly maxTokenOverrides: NestedOverrideMap;
   readonly maxInputTokenOverrides: NestedOverrideMap;
+  readonly reasoningEffortsOverrides: NestedReasoningEffortsOverrideMap;
   readonly contextOverrides: NestedOverrideMap;
   readonly customVisionOverrides: CustomModelVisionOverrideMap;
+  readonly compatVisionOverrides: ModelCompatVisionOverrideMap;
+  /** #14081: positive-only vision verdicts from synced custom-node model rows. */
+  readonly syncedAvailableModelVision: SyncedAvailableModelVisionMap;
 }
 
 export interface ModelCapabilityResolutionSnapshotOptions {
@@ -61,11 +76,22 @@ export function createModelCapabilityResolutionSnapshot(
 
   const maxTokenOverrides = new Map<string, Map<string, number>>();
   const maxInputTokenOverrides = new Map<string, Map<string, number>>();
+  const reasoningEffortsOverrides = new Map<
+    string,
+    Map<string, readonly ReasoningEffortOverrideValue[]>
+  >();
   for (const entry of listModelCapabilityOverrides()) {
     if (entry.key === "max_output_tokens") {
       setNestedOverride(maxTokenOverrides, entry.provider, entry.modelId, entry.value);
     } else if (entry.key === "max_input_tokens") {
       setNestedOverride(maxInputTokenOverrides, entry.provider, entry.modelId, entry.value);
+    } else if (entry.key === "reasoning_efforts") {
+      let byModel = reasoningEffortsOverrides.get(entry.provider);
+      if (!byModel) {
+        byModel = new Map();
+        reasoningEffortsOverrides.set(entry.provider, byModel);
+      }
+      byModel.set(entry.modelId, entry.value);
     }
   }
 
@@ -78,7 +104,10 @@ export function createModelCapabilityResolutionSnapshot(
     synced,
     maxTokenOverrides,
     maxInputTokenOverrides,
+    reasoningEffortsOverrides,
     contextOverrides,
     customVisionOverrides: listCustomModelVisionOverrides(options.customModelVision),
+    compatVisionOverrides: listModelCompatVisionOverrides(),
+    syncedAvailableModelVision: listSyncedAvailableModelVision(),
   };
 }

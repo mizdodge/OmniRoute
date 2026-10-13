@@ -17,7 +17,7 @@ const originalFetch = globalThis.fetch;
 
 async function resetStorage() {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
@@ -79,11 +79,29 @@ test.beforeEach(async () => {
 test.after(async () => {
   globalThis.fetch = originalFetch;
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("successful GLM quota refresh clears transient rate-limit state", async () => {
-  const connection = await createGlmConnectionWithTransientCooldown();
+  // The cooldown must already be EXPIRED for a successful refresh to clear it
+  // (#11277: a rateLimitedUntil still in the future is a hard statement from
+  // the error handler that persisted it — no quota poll may overrule it,
+  // regardless of lastErrorType). Before #11277's fix this test used a
+  // still-future rateLimitedUntil and asserted it got cleared anyway, which
+  // was the same defect class as the reported bug, just a shorter window.
+  const connection = await providersDb.createProviderConnection({
+    provider: "glm",
+    authType: "apikey",
+    name: `GLM Recovery ${Date.now()}`,
+    apiKey: "glm-test-key",
+    testStatus: "unavailable",
+    rateLimitedUntil: new Date(Date.now() - 60_000).toISOString(),
+    lastError: "rate limit exceeded",
+    lastErrorType: "rate_limited",
+    lastErrorSource: "executor",
+    errorCode: 429,
+    backoffLevel: 2,
+  });
   const connectionId = (connection as { id: string }).id;
 
   await withMockedFetch((() => glmQuotaResponse()) as typeof fetch, async () => {
@@ -99,6 +117,39 @@ test("successful GLM quota refresh clears transient rate-limit state", async () 
   assert.equal(updated.errorCode, undefined, "errorCode should be cleared");
   assert.equal(updated.lastErrorType, undefined, "lastErrorType should be cleared");
   assert.equal(updated.backoffLevel, 0, "backoffLevel should be reset to 0");
+});
+
+test("a still-future rateLimitedUntil is not cleared by a successful quota refresh, regardless of lastErrorType (#11277)", async () => {
+  const stillFutureRateLimitedUntil = new Date(Date.now() + 60_000).toISOString();
+  const connection = await providersDb.createProviderConnection({
+    provider: "glm",
+    authType: "apikey",
+    name: `GLM Still Cooling ${Date.now()}`,
+    apiKey: "glm-test-key",
+    testStatus: "unavailable",
+    rateLimitedUntil: stillFutureRateLimitedUntil,
+    lastError: "rate limit exceeded",
+    lastErrorType: "rate_limited",
+    lastErrorSource: "executor",
+    errorCode: 429,
+    backoffLevel: 2,
+  });
+  const connectionId = (connection as { id: string }).id;
+
+  await withMockedFetch((() => glmQuotaResponse()) as typeof fetch, async () => {
+    await providerLimits.fetchAndPersistProviderLimits(connectionId, "manual");
+  });
+
+  const updated = (await providersDb.getProviderConnectionById(connectionId)) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(
+    updated.testStatus,
+    "unavailable",
+    "an active cooldown must stay locked even though the quota fetch succeeded"
+  );
+  assert.equal(updated.rateLimitedUntil, stillFutureRateLimitedUntil);
 });
 
 async function createGlmConnectionWithStatus(status: string) {
@@ -298,6 +349,122 @@ test("Claude subscription quota recovery clears synthetic cooldown once the real
   assert.equal(after.backoffLevel, 0, "backoff level should reset to 0");
 });
 
+// ─── syntheticCooldownOutlivedByRealWindows override contract ───────────────
+// The override that un-locks the synthetic Claude cooldown above is a real
+// resilience-semantics change; these tests pair with it explicitly
+// (fails-before: every case here ran red on CI run 32786966560 shard 7/8
+// before the override existed / would go red if the gate were unconditional).
+test("syntheticCooldownOutlivedByRealWindows accepts replenished windows with an elapsed reset", () => {
+  const now = Date.now();
+  const ok = providerLimits.syntheticCooldownOutlivedByRealWindows(
+    {
+      quotas: {
+        session: { remaining: 87, resetAt: new Date(now - 60_000).toISOString() },
+        weekly: {
+          remaining: 62,
+          remainingPercentage: 62,
+          resetAt: new Date(now - 60_000).toISOString(),
+        },
+      },
+    },
+    now
+  );
+  assert.equal(ok, true, "positive live-window evidence must authorize the override");
+});
+
+test("syntheticCooldownOutlivedByRealWindows refuses windows without any reset evidence", () => {
+  const now = Date.now();
+  // Unknown-reset window: remaining > 0 but no parseable resetAt — matches the
+  // kimi-coding partial-refresh semantics (never authorize on unknown state).
+  const refused = providerLimits.syntheticCooldownOutlivedByRealWindows(
+    { quotas: { Ratelimit: { remaining: 100 }, Weekly: { remaining: 62 } } },
+    now
+  );
+  assert.equal(refused, false, "unknown-reset windows must not authorize an override");
+});
+
+test("override does not unlock executor-sourced rate limits (#11277)", async () => {
+  const created = await providersDb.createProviderConnection({
+    provider: "glm",
+    authType: "apikey",
+    name: `Executor RL ${Date.now()}`,
+    apiKey: "glm-exec-key",
+    testStatus: "unavailable",
+    isActive: true,
+    lastError: "429 too many requests",
+    lastErrorType: "rate_limited",
+    lastErrorSource: "executor",
+    errorCode: 429,
+    rateLimitedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    backoffLevel: 2,
+  });
+  const connection = await providersDb.getProviderConnectionById((created as { id: string }).id);
+
+  const result = await providerLimits.maybeClearRecoveredQuotaState(connection, {
+    quotas: {
+      tokens: { remaining: 90, resetAt: new Date(Date.now() - 60_000).toISOString() },
+    },
+  });
+
+  assert.equal(result.testStatus, "unavailable", "executor 429 lockout must stay hard");
+  assert.ok(result.rateLimitedUntil, "future rateLimitedUntil must be preserved (#11277)");
+});
+
+test("override does not unlock extra_usage policy blocks", async () => {
+  const created = await providersDb.createProviderConnection({
+    provider: "claude",
+    authType: "oauth",
+    accessToken: "tok-extra-usage-refusal",
+    refreshToken: "refresh-extra-usage-refusal",
+    testStatus: "unavailable",
+    isActive: true,
+    lastError: "extra usage limit",
+    lastErrorType: "quota_exhausted",
+    lastErrorSource: "extra_usage",
+    errorCode: 429,
+    rateLimitedUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+    backoffLevel: 1,
+  });
+  const connection = await providersDb.getProviderConnectionById((created as { id: string }).id);
+
+  const result = await providerLimits.maybeClearRecoveredQuotaState(connection, {
+    quotas: {
+      session: { remaining: 80, resetAt: new Date(Date.now() - 60_000).toISOString() },
+      weekly: { remaining: 70, resetAt: new Date(Date.now() - 60_000).toISOString() },
+    },
+  });
+
+  assert.equal(result.testStatus, "unavailable", "extra_usage blocks are never synthetic");
+  assert.ok(result.rateLimitedUntil, "extra_usage cooldown must be preserved");
+});
+
+test("override does not unlock when a quota window lacks reset evidence", async () => {
+  const created = await providersDb.createProviderConnection({
+    provider: "claude",
+    authType: "oauth",
+    accessToken: "tok-unknown-reset-refusal",
+    refreshToken: "refresh-unknown-reset-refusal",
+    testStatus: "unavailable",
+    isActive: true,
+    lastError: "usage limit reached",
+    lastErrorType: "quota_exhausted",
+    errorCode: 429,
+    rateLimitedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    backoffLevel: 1,
+  });
+  const connection = await providersDb.getProviderConnectionById((created as { id: string }).id);
+
+  // One window carries no resetAt at all — the override must refuse.
+  const result = await providerLimits.maybeClearRecoveredQuotaState(connection, {
+    quotas: {
+      session: { remaining: 87, resetAt: new Date(Date.now() - 60_000).toISOString() },
+      weekly: { remaining: 62 },
+    },
+  });
+
+  assert.equal(result.testStatus, "unavailable", "unknown-reset window keeps the lock");
+});
+
 test("Claude subscription quota still exhausted keeps the connection locked (no real recovery yet)", async () => {
   // Inverse of the above: the real session window is still exhausted with no parseable
   // reset (mirrors the existing kimi-coding test's semantics) — must stay locked even
@@ -332,6 +499,52 @@ test("Claude subscription quota still exhausted keeps the connection locked (no 
   assert.equal(after.testStatus, "unavailable");
   assert.equal(after.lastErrorType, "quota_exhausted");
   assert.equal(after.rateLimitedUntil, syntheticRateLimitedUntil);
+});
+
+test("rate_limit_exceeded cooldown is not cleared early by an unrelated quota window looking usable (#11277)", async () => {
+  // Reproduces #11277: a connection-scoped cooldown persisted with
+  // lastErrorType "rate_limit_exceeded" (RateLimitReason.RATE_LIMIT_EXCEEDED)
+  // and a long rateLimitedUntil (derived from an upstream reset hint — the
+  // reported production case was ~146h) must NOT be cleared just because the
+  // next scheduled quota sync reports hasUsableQuota()===true from some
+  // unrelated window. Before the fix, only lastErrorType==="quota_exhausted"
+  // reached the rateLimitedUntil guard, so every other reason (including
+  // rate_limit_exceeded) skipped straight to clearRecoveredProviderState(),
+  // producing a self-restart/burn loop on a multi-day cooldown.
+  const farFutureRateLimitedUntil = new Date(Date.now() + 146 * 60 * 60 * 1000).toISOString();
+  const created = await providersDb.createProviderConnection({
+    provider: "opencode",
+    authType: "apikey",
+    name: `OpenCode RateLimitExceeded ${Date.now()}`,
+    apiKey: "opencode-test-key",
+    testStatus: "unavailable",
+    isActive: true,
+    lastError: "Account quota exhausted (opencode)",
+    lastErrorType: "rate_limit_exceeded",
+    errorCode: 429,
+    rateLimitedUntil: farFutureRateLimitedUntil,
+    backoffLevel: 1,
+  });
+  const connectionId = (created as { id: string }).id;
+  const connection = await providersDb.getProviderConnectionById(connectionId);
+
+  // No `quotas` object at all (degraded/partial fetch shape) — this is the
+  // exact shape that, pre-fix, fell straight through to hasTransientState
+  // and cleared the cooldown for any lastErrorType other than quota_exhausted.
+  const result = await providerLimits.maybeClearRecoveredQuotaState(connection, {
+    quotas: { unrelated: { unlimited: true } },
+  });
+
+  assert.equal(
+    result.testStatus,
+    "unavailable",
+    "an active rate_limit_exceeded cooldown must stay locked"
+  );
+
+  const after = await providersDb.getProviderConnectionById(connectionId);
+  assert.equal(after.testStatus, "unavailable");
+  assert.equal(after.lastErrorType, "rate_limit_exceeded");
+  assert.equal(after.rateLimitedUntil, farFutureRateLimitedUntil);
 });
 
 test("CAS primitive clears when expected state matches", async () => {

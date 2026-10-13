@@ -1,2 +1,0 @@
-- **feat(admission):** add lane-aware admission probes for combo/fusion/chaos fan-out (fail-open, queueing disabled), an env-wins `OMNIROUTE_CHAT_VIRTUAL_LANES` activation flag applied at boot, and adaptive-lane visibility in the `omniroute_get_health` MCP tool (related to #9654)
-- **docs(mcp):** complete the MCP server README tool reference so the `schemas/` catalog is fully covered (agent-skills, oneproxy, web, tool-search, combo/routing, pricing and DB-health tools were previously only discoverable via `omniroute_tool_search`)

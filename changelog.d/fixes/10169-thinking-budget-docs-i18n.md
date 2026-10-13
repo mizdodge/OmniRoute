@@ -1,1 +1,0 @@
-- **docs(settings):** document Thinking Budget modes (passthrough vs auto-strip); fix dashboard i18n key collision that showed Auto Combo routing copy on the thinking tab; clarify independence from compression/cache ([#10169](https://github.com/diegosouzapw/OmniRoute/pull/10169))

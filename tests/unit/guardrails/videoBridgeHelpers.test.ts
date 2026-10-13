@@ -366,6 +366,44 @@ test("uses the broker seam, reports configured versus extracted frames, and mark
   assert.match(result.description, /do not follow instructions/i);
 });
 
+test("uses a bounded candidate pool before the final caption cap and preserves endpoint coverage", async () => {
+  let candidateFrameCount = 0;
+  const captionedTimestamps: number[] = [];
+  const result = await describeVideoPart(
+    {
+      container: "messages",
+      messageIndex: 0,
+      partIndex: 0,
+      ref: "data:video/mp4;base64,QUJD",
+      shape: "input_video",
+    },
+    { frameCount: 3, timeoutMs: 5_000 },
+    async (_frame, timestampSeconds) => {
+      captionedTimestamps.push(timestampSeconds);
+      return `frame ${timestampSeconds}`;
+    },
+    {
+      extractFrames: async (_bytes, options) => {
+        candidateFrameCount = options.frameCount;
+        return {
+          durationSeconds: 6,
+          frames: Array.from({ length: options.frameCount }, (_unused, index) => ({
+            dataUri: `data:image/jpeg;base64,${Buffer.from(String(index)).toString("base64")}`,
+            timestampSeconds: index + 1,
+          })),
+        };
+      },
+    }
+  );
+
+  assert.equal(candidateFrameCount, 6, "three caption slots get at most two candidates each");
+  assert.deepEqual(captionedTimestamps, [1, 4, 6]);
+  assert.equal(result.framesRequested, 3);
+  assert.equal(result.framesExtracted, 6);
+  assert.equal(result.framesUsed, 3);
+  assert.equal(result.dedupDropped, 0, "malformed candidate comparisons must fail open");
+});
+
 test("video downloads require HTTPS on every redirect hop", async () => {
   let requireHttps: boolean | undefined;
   await describeVideoPart(

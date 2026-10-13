@@ -12,7 +12,7 @@
  * temp-directory filesystem.
  */
 
-import { describe, it, beforeEach, after } from "node:test";
+import { describe, it, beforeEach, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,14 +39,14 @@ after(() => {
   } else {
     process.env.DATA_DIR = ORIGINAL_DATA_DIR;
   }
-  fs.rmSync(FIXED_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(FIXED_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("resolveSpawnArgs (#6877 — real filesystem)", () => {
   const dataDir = FIXED_DATA_DIR;
 
   beforeEach(() => {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     fs.mkdirSync(dataDir, { recursive: true });
   });
 
@@ -66,10 +66,21 @@ describe("resolveSpawnArgs (#6877 — real filesystem)", () => {
     );
     assert.ok(!result.args.includes("-c"), "args must never contain the short -c flag");
   });
+  it("injects the management password without persisting it in config.yaml", async () => {
+    const { resolveSpawnArgs } =
+      await import("../../../../src/lib/services/installers/cliproxy.ts");
+    const result = resolveSpawnArgs(8317, "management-secret");
+    assert.equal(result.env.MANAGEMENT_PASSWORD, "management-secret");
+    const configPath = path.join(dataDir, "services", "cliproxy", "config.yaml");
+    assert.equal(fs.readFileSync(configPath, "utf8").includes("management-secret"), false);
+  });
 
   it("uses the .exe command name on Windows", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // resolveSpawnArgs reads os.platform() at call time (#11236 — a
+    // process.platform literal is constant-folded away by the Linux build of
+    // the published artifact), so the Windows host is simulated through the
+    // same runtime os.platform() seam binaryManager.test.ts uses for #10244.
+    const platformMock = mock.method(os, "platform", () => "win32");
 
     try {
       const { resolveSpawnArgs } =
@@ -78,9 +89,7 @@ describe("resolveSpawnArgs (#6877 — real filesystem)", () => {
 
       assert.equal(result.command, path.join(dataDir, "bin", "cliproxyapi.exe"));
     } finally {
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
-      }
+      platformMock.mock.restore();
     }
   });
 

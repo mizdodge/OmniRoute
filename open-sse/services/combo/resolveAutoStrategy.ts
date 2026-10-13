@@ -4,12 +4,13 @@ import {
   errorResponseWithComboDiagnostics,
 } from "../../utils/error.ts";
 import { BudgetExceededError, selectProvider as selectAutoProvider } from "../autoCombo/engine.ts";
+import type { ScoringWeights } from "../autoCombo/scoring.ts";
 import {
   resolveRequestModePack,
   parseRequestBudgetCap,
   parseRequestBudgetFallback,
 } from "../autoCombo/requestControls.ts";
-import { selectWithStrategy } from "../autoCombo/routerStrategy.ts";
+import { selectWithStrategyAsync } from "../autoCombo/routerStrategy.ts";
 import { buildComplexityRoutingHint } from "../autoCombo/complexityRouter";
 import { getModePack } from "../autoCombo/modePacks.ts";
 import {
@@ -31,6 +32,7 @@ import { supportsToolCalling } from "../modelCapabilities.ts";
 import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { parseAutoConfig } from "./autoConfig.ts";
 import { dedupeTargetsByExecutionKey } from "./comboData.ts";
+import { restoreIncomingOrder } from "./rungOrder.ts";
 import { buildRolePoolFailoverOrder } from "./rolePools.ts";
 import {
   getModelContextLimitForModelString,
@@ -100,10 +102,58 @@ export type ResolveAutoStrategyResult =
       adaptiveTask: ReturnType<typeof classifyAdaptiveTask>;
     };
 
+export interface EvaluateAutoCandidatesOptions {
+  targets: ResolvedComboTarget[];
+  comboName: string;
+  body: Record<string, unknown>;
+  taskType: string;
+  weights: ScoringWeights;
+  sessionId?: string | null;
+  resetWindowConfig?: ResetWindowConfig;
+  resilienceSettings?: ResilienceSettings | null;
+  manifestHint?: RoutingHint | null;
+  buildAutoCandidates: BuildAutoCandidates;
+}
+
+export async function evaluateAutoCandidates(options: EvaluateAutoCandidatesOptions) {
+  const builtCandidates = await options.buildAutoCandidates(
+    options.targets,
+    options.comboName,
+    options.sessionId,
+    options.resetWindowConfig,
+    options.resilienceSettings
+  );
+  const cacheAffinityScores = calculatePromptCacheAffinityScores(
+    builtCandidates,
+    options.body,
+    options.sessionId
+  );
+  const candidates = builtCandidates.map((candidate) => ({
+    ...candidate,
+    cacheAffinity: cacheAffinityScores.get(promptCacheTargetIdentity(candidate)) ?? 0,
+  }));
+  const routableCandidates = candidates.filter(
+    (candidate) => candidate.quotaCutoffBlocked !== true
+  );
+  return {
+    sourceCandidates: builtCandidates,
+    candidates,
+    routableCandidates,
+    scoredTargets: scoreAutoTargets(
+      options.targets,
+      routableCandidates,
+      options.taskType,
+      options.weights,
+      options.manifestHint
+    ),
+  };
+}
+
 /**
  * Resolve target ordering for the `auto` combo strategy.
  *
- * Extracted verbatim from `handleComboChat`'s `if (strategy === "auto")` branch:
+ * Extracted verbatim from `handleComboChat`'s auto-strategy branch (now selected by the
+ * `ordering: "auto"` trait in strategyRegistry.ts):
  * tool-calling + context-window pre-filters, intent classification, candidate
  * building (quota cutoff), explicit-router vs rules selection, complexity-aware
  * scoring and final dedup ordering. Behavior is byte-identical to the previous
@@ -196,32 +246,11 @@ export async function resolveAutoStrategyOrder(
         `Auto strategy: context-window filter kept ${filteredByContext.length}/${eligibleTargets.length} candidates (est. ${estimatedInputTokens} tokens)`
       );
       eligibleTargets = filteredByContext;
-    } else if (compatFilterFailOpen) {
+    } else {
       log.warn(
         "COMBO",
-        `Auto strategy: all candidates filtered by context-window policy (est. ${estimatedInputTokens} tokens), falling back to full pool (compatFilterFailOpen)`
+        `Auto strategy: all candidates filtered by approximate context-window policy (est. ${estimatedInputTokens} tokens), falling back to full pool`
       );
-    } else {
-      // #8488: every candidate has a known limit below the estimate — surface
-      // context_length_exceeded rather than dispatching oversized targets.
-      return {
-        earlyResponse: errorResponseWithComboDiagnostics(
-          400,
-          `Request requires approximately ${estimatedInputTokens} tokens, but every auto-strategy candidate in combo ${combo.name} has a smaller known context limit`,
-          {
-            poolSize: eligibleTargets.length,
-            attempted: 0,
-            excluded: eligibleTargets.map((target) => ({
-              provider: target.provider,
-              model: target.modelStr,
-              reason: "context_window",
-            })),
-            attemptOrder: [],
-            terminalReason: "context_length_exceeded",
-          },
-          { code: "context_length_exceeded", type: "invalid_request_error" }
-        ),
-      };
     }
 
     eligibleTargets = await expandAutoComboCandidatePool(eligibleTargets, combo);
@@ -365,6 +394,7 @@ export async function resolveAutoStrategyOrder(
     modePack: configModePack,
     resetWindowConfig,
     slaPolicy,
+    nadirConfig,
     rolePools,
     judgeTarget,
   } = parseAutoConfig(combo, eligibleTargets, orderedTargets);
@@ -411,7 +441,7 @@ export async function resolveAutoStrategyOrder(
 
   let lastKnownGoodProvider: string | undefined;
   try {
-    const { getLKGP } = await import("../../../src/lib/localDb");
+    const { getLKGP } = await import("@/lib/db/settings");
     const lkgp = await getLKGP(combo.name, combo.id || combo.name);
     if (lkgp) lastKnownGoodProvider = lkgp.provider;
   } catch (err) {
@@ -588,14 +618,24 @@ export async function resolveAutoStrategyOrder(
 
     if (routingStrategy !== "rules") {
       try {
-        const decision = selectWithStrategy(
+        const decision = await selectWithStrategyAsync(
           routableCandidates,
           {
             taskType,
             requestHasTools,
             lastKnownGoodProvider,
+            // #11181: the Routing tab persists an LKGP on/off toggle and
+            // LKGPStrategy guards on `context.lkgpEnabled === false`, but the
+            // field was never forwarded into this context, so the guard never
+            // saw the setting and the off-switch was unreachable.
+            lkgpEnabled: (settings as { lkgpEnabled?: unknown } | null | undefined)?.lkgpEnabled as
+              boolean | undefined,
             estimatedInputTokens,
             sla: slaPolicy,
+            weights,
+            explorationRate,
+            messages: body.messages,
+            nadir: nadirConfig,
           },
           routingStrategy
         );
@@ -626,6 +666,7 @@ export async function resolveAutoStrategyOrder(
             modePack: adaptiveRoleActive ? undefined : modePack,
             budgetCap,
             budgetFallback,
+            estimatedInputTokens,
             explorationRate,
           },
           primaryRulesCandidates,
@@ -650,7 +691,7 @@ export async function resolveAutoStrategyOrder(
     // specificityMatch favor candidates whose tier matches the request.
     const autoManifestHint: RoutingHint | null =
       config.complexityAwareRouting === true
-        ? buildComplexityRoutingHint(
+        ? await buildComplexityRoutingHint(
             workerEligibleTargets.filter((t) => t.kind === "model"),
             body,
             log
@@ -711,9 +752,16 @@ export async function resolveAutoStrategyOrder(
     // With no adaptive role, retain the legacy Auto primary. The final
     // workerEligibleTargets tail keeps quota-blocked candidates as last-resort
     // fallbacks instead of removing them completely.
+    // Preserve upstream opt-in rung ordering for neutral Auto, while adaptive
+    // role selection continues to keep its role pools authoritative.
+    const preserveRungOrder =
+      (combo as { autoConfig?: { preserveRungOrder?: unknown } })?.autoConfig?.preserveRungOrder === true;
+    const orderedRankedTargets = preserveRungOrder && !adaptiveTask.preferredRole
+      ? restoreIncomingOrder(rankedTargets, workerEligibleTargets)
+      : rankedTargets;
     const adaptivePoolOrder = adaptiveTask.preferredRole
-      ? rankedTargets
-      : [selectedTarget, ...rankedTargets];
+      ? orderedRankedTargets
+      : [selectedTarget, ...orderedRankedTargets];
     orderedTargets = dedupeTargetsByExecutionKey(
       [...adaptivePoolOrder, ...workerEligibleTargets].filter(
         (entry): entry is ResolvedComboTarget => entry !== undefined && entry !== null

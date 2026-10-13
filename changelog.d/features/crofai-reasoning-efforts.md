@@ -1,1 +1,0 @@
-- feat(crof): advertise reasoning-effort tiers (none/low/medium/high/max) for live-discovered and seed models, so the catalog, Playground, and Combo Builder surface <model>-<tier> aliases and requests resolve max upstream

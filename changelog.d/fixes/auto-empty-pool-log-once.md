@@ -1,1 +1,0 @@
-- **fix(auto):** rate-limit `auto/<family> matched no connected models` warnings to once per minute per label (`open-sse/services/autoCombo/virtualFactory.ts`)

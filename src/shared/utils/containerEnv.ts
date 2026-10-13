@@ -80,6 +80,52 @@ function stripTrailingSlash(p: string): string {
 }
 
 /**
+ * Filesystems that live in RAM or expose kernel state. A mount of one of these
+ * is never a bind mount from the host: a path under `--tmpfs /tmp`, or a
+ * container whose home sits on tmpfs, loses the file even before the container
+ * is recreated -- exactly the throwaway write this module exists to refuse.
+ * Every other type (ext4, xfs, btrfs, zfs, nfs, virtiofs, fuse.*, ...) can
+ * carry host data, so it still counts as proof the operator wired the path in.
+ */
+const NON_HOST_FS_TYPES = new Set([
+  "autofs",
+  "binfmt_misc",
+  "bpf",
+  "cgroup",
+  "cgroup2",
+  "configfs",
+  "debugfs",
+  "devpts",
+  "devtmpfs",
+  "efivarfs",
+  "fusectl",
+  "hugetlbfs",
+  "mqueue",
+  "nsfs",
+  "proc",
+  "pstore",
+  "ramfs",
+  "rpc_pipefs",
+  "securityfs",
+  "selinuxfs",
+  "sysfs",
+  "tmpfs",
+  "tracefs",
+]);
+
+/**
+ * mountinfo puts a variable number of optional fields after field 7 and closes
+ * them with a lone "-"; the field right after that separator is the filesystem
+ * type. Returns null when the line carries no separator, which the caller
+ * treats as "not proof of a host mount".
+ */
+function mountFsType(fields: string[]): string | null {
+  const separator = fields.indexOf("-", 6);
+  if (separator === -1) return null;
+  return fields[separator + 1] || null;
+}
+
+/**
  * True when `targetPath` is connected to a mount, in any of three ways:
  *
  *   1. the path IS a mount point            (`-v ~/.codex:/host-home/.codex`)
@@ -87,6 +133,10 @@ function stripTrailingSlash(p: string): string {
  *   3. a mount point sits BENEATH the path  (`/host-home`, whose children are
  *      the actual mounts — this is exactly how the compose `host` profile is
  *      wired, so case 3 is not optional)
+ *
+ * Only mounts backed by a filesystem that can hold host data count (see
+ * NON_HOST_FS_TYPES): a tmpfs/ramfs mount is throwaway storage, not a bind
+ * mount, so it must not clear the ephemeral flag.
  *
  * Returns false whenever `/proc/self/mountinfo` is unavailable, which keeps
  * host machines (macOS, Windows) on the conservative path.
@@ -111,6 +161,10 @@ export function hasBindMountAt(
     if (fields.length < 5) continue;
     const mountPoint = stripTrailingSlash(decodeMountPath(fields[4] || ""));
     if (!mountPoint || mountPoint === "/") continue;
+    // An in-memory/pseudo filesystem does not reach the host, so it can never
+    // stand in for the bind mount the operator was asked to wire up.
+    const fsType = mountFsType(fields);
+    if (!fsType || NON_HOST_FS_TYPES.has(fsType)) continue;
 
     if (mountPoint === target) return true;
     if (mountPoint.startsWith(`${target}/`)) return true;

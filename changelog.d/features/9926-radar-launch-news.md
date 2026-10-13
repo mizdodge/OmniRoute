@@ -1,1 +1,0 @@
-- **feat(radar):** add a localized public news feed and dismissible dashboard launch banner, with the Radar announcement staged inactive for a separately authorized launch ([#9926](https://github.com/diegosouzapw/OmniRoute/pull/9926))

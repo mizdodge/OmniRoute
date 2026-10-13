@@ -114,6 +114,11 @@ const DEFAULT_COMBO_CONFIG = {
   handoffProviders: ["codex"],
   maxMessagesForSummary: 30,
   maxComboDepth: 3,
+  // #11134: shared per-request combo attempt budget. Previously the hardcoded
+  // MAX_GLOBAL_ATTEMPTS with no override — operators could neither fail fast on
+  // a dead pool nor raise it for large combos. Clamped by clampGlobalAttempts to
+  // [1, MAX_GLOBAL_ATTEMPTS_HARD_CAP] at every read site.
+  maxGlobalAttempts: 30,
   nestedComboMode: "flatten",
   trackMetrics: true,
   reasoningTokenBufferEnabled: true,
@@ -126,6 +131,7 @@ const DEFAULT_COMBO_CONFIG = {
   resetAwareWeeklyWeight: 0.65,
   resetAwareTieBandPercent: 5,
   resetAwareExhaustionGuardPercent: 10,
+  quotaWeightedFloorPercent: 1,
   // Historical default (predates #2417/#10217) — true. This value feeds TWO
   // independent mechanisms and must stay true-by-default for one of them:
   //   1. skipUpstreamRetry (src/sse/handlers/chat.ts:859,1126) — the
@@ -189,6 +195,9 @@ const DEFAULT_COMBO_CONFIG = {
     latencyWeight: 0.15,
     cacheTtlMs: 60000,
   },
+  // Connection-aware expansion for group-B combo strategies is opt-in.
+  connectionAwareExpansion: false,
+  connectionAwareExpansionMaxPerTarget: 8,
   // Context window requirements for combo target filtering/sorting (undefined by
   // default — declared here so resolveComboSetupConfig's inferred return type
   // includes the key; combo.ts reads config.contextRequirements).

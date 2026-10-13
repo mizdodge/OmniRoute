@@ -1,1 +1,0 @@
-- **fix(providers):** FreeAIAPIKey now targets `api.freeaiapikey.com`, the host upstream names in its `410 endpoint_moved` response — every request through the provider was failing — and its catalog is resynced to the 10 models the live `/v1/models` actually serves ([#10233](https://github.com/diegosouzapw/OmniRoute/pull/10233))

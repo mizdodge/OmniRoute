@@ -1,1 +1,0 @@
-- **fix(api):** hash API keys in the `/v1/models` catalog cache Map key so heap dumps cannot leak bearer tokens (`src/app/api/v1/models/catalogCache.ts`)

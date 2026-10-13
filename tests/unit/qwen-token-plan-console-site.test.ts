@@ -28,15 +28,15 @@ test("an Alibaba console cookie resolves to the Model Studio console", () => {
   const site = resolveConsoleSite("cna=x; login_aliyunid_ticket=abc; aui=1", undefined);
   assert.equal(site.consoleSite, "ALIYUN");
   assert.equal(site.domain, "modelstudio.console.alibabacloud.com");
-  assert.ok(site.gatewayHost.includes("bailian-singapore-cs.alibabacloud.com"));
-  assert.ok(site.origin.includes("modelstudio.console.alibabacloud.com"));
+  assert.equal(new URL(site.gatewayHost).hostname, "bailian-singapore-cs.alibabacloud.com");
+  assert.equal(new URL(site.origin).hostname, "modelstudio.console.alibabacloud.com");
 });
 
 test("a QwenCloud console cookie resolves to the QwenCloud console", () => {
   const site = resolveConsoleSite("cna=x; login_qwencloud_ticket=abc", undefined);
   assert.equal(site.consoleSite, "QWENCLOUD");
   assert.equal(site.domain, "home.qwencloud.com");
-  assert.ok(site.gatewayHost.includes("cs-data.qwencloud.com"));
+  assert.equal(new URL(site.gatewayHost).hostname, "cs-data.qwencloud.com");
 });
 
 test("the provider decides when the cookie carries no console marker", () => {
@@ -93,12 +93,13 @@ test("fetch sends the Alibaba console identity for an aliyun cookie", async () =
 
   const usageCall = calls.find((c) => c.url.includes("%2Fusage"));
   assert.ok(usageCall, "usage call missing");
-  assert.ok(
-    usageCall.url.includes("bailian-singapore-cs.alibabacloud.com"),
+  assert.equal(
+    new URL(usageCall.url).hostname,
+    "bailian-singapore-cs.alibabacloud.com",
     `wrong gateway host: ${usageCall.url}`
   );
   const headers = usageCall.init?.headers as Record<string, string>;
-  assert.ok(String(headers.Referer).includes("modelstudio.console.alibabacloud.com"));
+  assert.equal(new URL(String(headers.Referer)).hostname, "modelstudio.console.alibabacloud.com");
   const params = JSON.parse(
     new URLSearchParams(String(usageCall.init?.body)).get("params") ?? "{}"
   );

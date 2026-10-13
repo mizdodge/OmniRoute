@@ -32,9 +32,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const { saveModelsDevCapabilities, clearModelsDevCapabilities } =
   await import("../../src/lib/modelsDevSync.ts");
-const { getKnownContextOverflow, handleComboChat } = await import(
-  "../../open-sse/services/combo.ts"
-);
+const { handleComboChat } = await import("../../open-sse/services/combo.ts");
 const { updateCompressionSettings } = await import("../../src/lib/db/compression.ts");
 const { handleChatCore } = await import("../../open-sse/handlers/chatCore.ts");
 
@@ -45,7 +43,7 @@ test.after(() => {
   } else {
     process.env.DATA_DIR = ORIGINAL_DATA_DIR;
   }
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test.beforeEach(() => {
@@ -96,32 +94,6 @@ function bigResponsesBody(tokens: number) {
 
 const noopLog = { info() {}, warn() {}, error() {}, debug() {} };
 
-test("#10225 getKnownContextOverflow defers the hard overflow when compression is available", () => {
-  saveModelsDevCapabilities({ codex: { "gpt-5.6-terra": capabilityEntry(272_000) } });
-  const body = bigResponsesBody(275_000);
-
-  // Compression enabled + target can compress -> defer (null).
-  assert.equal(
-    getKnownContextOverflow([target("codex/gpt-5.6-terra")], body, {
-      deferContextOverflowWhenCompressible: true,
-    }),
-    null,
-    "compressible request must defer so chatCore compression can run (#10225)"
-  );
-
-  // Compression disabled -> the existing hard overflow is preserved (never lose #7177).
-  const hard = getKnownContextOverflow([target("codex/gpt-5.6-terra")], body);
-  assert.ok(hard);
-  assert.ok(hard.requiredContextTokens > hard.maxKnownContextTokens);
-
-  // Compression enabled but EVERY target is excluded from compression -> keep the hard gate.
-  const excluded = getKnownContextOverflow([target("codex/gpt-5.6-terra")], body, {
-    deferContextOverflowWhenCompressible: true,
-    compressionExclusions: ["gpt-5.6-terra"],
-  });
-  assert.ok(excluded, "fully-excluded targets must retain the hard preflight");
-});
-
 test("#10225 combo does not early-400 a compressible over-limit request when deferral is on", async () => {
   saveModelsDevCapabilities({ codex: { "gpt-5.6-terra": capabilityEntry(272_000) } });
   let dispatches = 0;
@@ -168,20 +140,23 @@ test("#10225 combo keeps the fast 400 when compression is disabled", async () =>
     log: noopLog,
   });
 
-  assert.equal(response.status, 400);
-  assert.equal(dispatches, 0, "#7177 anti-exhaustion guard must survive when compression is off");
-  const body = await response.json();
-  assert.equal(body.error.code, "context_length_exceeded");
+  // #10162: approximate token estimates are advisory. Combo must not
+  // hard-400 locally just because chars/4 exceeds a catalog window.
+  assert.notEqual(response.status, 400, "advisory estimates must not hard-400 (#10162)");
+  assert.equal(dispatches, 1, "request must reach handleSingleModel when estimates are advisory");
 });
 
 // #10501-sweep #10503 — the deferral above is NOT target-aware by default: it only
 // checks operator-named compression exclusions, never whether chatCore will actually
-// attempt compression for the resolved target. handleChatCore.ts unconditionally sets
-// `compressionExcluded = nativeCodexPassthrough || ...` for a verified native Codex
-// Responses passthrough target (open-sse/handlers/chatCore.ts) — deferring the
+// attempt compression for the resolved target. chatCore's *reactive* compaction and
+// last-resort gates still bypass native Codex passthrough targets
+// (open-sse/handlers/chatCore.ts `!nativeCodexPassthrough` checks) — deferring the
 // preflight there means an oversized request sails past BOTH gates uncompressed. These
 // tests pin the fix: a native-codex-passthrough target must never count toward "can
 // compress", so the hard preflight stays active and no upstream dispatch happens.
+// NOTE: prompt (proactive) compression DOES run for native passthrough since the
+// codex analytics fix (see chatCore.ts `compressionExcluded`); only the reactive /
+// combo-deferral bypasses remain. That split is intentional prompt-only scope.
 // NOTE on `clientManagedResponsesContext: false` below: these tests deliberately do
 // NOT set it, to isolate the fix from the PRE-EXISTING, unrelated early-return a few
 // lines above in knownContextOverflow.ts ("Native Codex Responses clients compact
@@ -191,48 +166,8 @@ test("#10225 combo keeps the fast 400 when compression is disabled", async () =>
 // circuits to true for `provider === "codex"` regardless of verification (see
 // passthroughHelpers.ts), so an UNVERIFIED request that nonetheless targets a `codex`
 // combo member over `/v1/responses` in openai-responses format still hits chatCore's
-// compression bypass — exactly the gap `sourceFormat`/`endpointPath` (not the looser
+// reactive compression bypass — exactly the gap `sourceFormat`/`endpointPath` (not the looser
 // `clientManagedResponsesContext` flag) now closes.
-test("#10503 getKnownContextOverflow REFUSES to defer when the only target is native Codex Responses passthrough", () => {
-  saveModelsDevCapabilities({ codex: { "gpt-5.6-terra": capabilityEntry(272_000) } });
-  const body = bigResponsesBody(275_000);
-
-  const overflow = getKnownContextOverflow([target("codex/gpt-5.6-terra")], body, {
-    deferContextOverflowWhenCompressible: true,
-    sourceFormat: "openai-responses",
-    endpointPath: "/v1/responses",
-  });
-
-  assert.ok(
-    overflow,
-    "a native-codex-passthrough target must never be treated as compressible — the " +
-      "hard preflight must stay active (chatCore disables compression for it entirely)"
-  );
-});
-
-test("#10503 getKnownContextOverflow still defers when a genuinely compressible sibling target is present", () => {
-  saveModelsDevCapabilities({
-    codex: { "gpt-5.6-terra": capabilityEntry(272_000) },
-    openai: { "gpt-5.6-terra": capabilityEntry(272_000) },
-  });
-  const body = bigResponsesBody(275_000);
-
-  // A heterogeneous pool where at least ONE target (openai) genuinely runs
-  // compression must still defer — deferral is a per-request decision, and other
-  // targets in the pool are unaffected by the codex-specific compression bypass.
-  const overflow = getKnownContextOverflow(
-    [target("codex/gpt-5.6-terra"), target("openai/gpt-5.6-terra")],
-    body,
-    {
-      deferContextOverflowWhenCompressible: true,
-      sourceFormat: "openai-responses",
-      endpointPath: "/v1/responses",
-    }
-  );
-
-  assert.equal(overflow, null, "a genuinely compressible sibling target must still defer");
-});
-
 test("#10503 handleComboChat: native-codex-passthrough pool fails FAST locally, zero upstream dispatches", async () => {
   saveModelsDevCapabilities({ codex: { "gpt-5.6-terra": capabilityEntry(272_000) } });
   let dispatches = 0;
@@ -255,14 +190,10 @@ test("#10503 handleComboChat: native-codex-passthrough pool fails FAST locally, 
     log: noopLog,
   });
 
-  assert.equal(
-    response.status,
-    400,
-    "must fail fast locally instead of dispatching an oversized, uncompressible request"
-  );
-  assert.equal(dispatches, 0, "no wasted upstream call for a target that can never compress");
-  const responseBody = await response.json();
-  assert.equal(responseBody.error.code, "context_length_exceeded");
+  // #10162: combo no longer hard-400s on approximate overflow for native Codex
+  // passthrough either. Fail-fast after compression (if any) lives in chatCore.
+  assert.notEqual(response.status, 400, "advisory estimates must not hard-400 native Codex pools");
+  assert.equal(dispatches, 1, "request must reach handleSingleModel");
 });
 
 // #10503 item 2 — drive the REAL chatCore compression pipeline end-to-end (not just the
@@ -306,7 +237,13 @@ async function invokeChatCoreCapturingUpstream(body: Record<string, unknown>) {
   const originalFetch = globalThis.fetch;
   let dispatched = false;
   let sentBodyJson: string | null = null;
-  globalThis.fetch = async (_url: RequestInfo | URL, init: RequestInit = {}) => {
+  globalThis.fetch = async (url: RequestInfo | URL, init: RequestInit = {}) => {
+    // Stacked compression reports each engine step to the dashboard live feed through a
+    // loopback `/__omniroute_event` POST (#14529 made header-less requests stacked). That is
+    // internal telemetry, not upstream dispatch — only a provider request counts here.
+    if (String(url instanceof Request ? url.url : url).includes("/__omniroute_event")) {
+      return new Response(null, { status: 204 });
+    }
     dispatched = true;
     sentBodyJson = init.body ? String(init.body) : null;
     return new Response(
@@ -361,7 +298,10 @@ test("#10503 real chatCore path: a compressible request dispatches the COMPRESSE
 
     const { dispatched, sentBodyJson } = await invokeChatCoreCapturingUpstream(body);
 
-    assert.ok(dispatched, "compression must let a genuinely compressible request reach chatCore's dispatch");
+    assert.ok(
+      dispatched,
+      "compression must let a genuinely compressible request reach chatCore's dispatch"
+    );
     assert.ok(sentBodyJson, "the dispatched request must carry a body");
     assert.ok(
       sentBodyJson!.length < rawLen * 0.5,

@@ -1,1 +1,0 @@
-- **fix(logging):** move call-log artifact serialization and filesystem writes to a bounded singleton worker to keep request handling responsive (#10123)

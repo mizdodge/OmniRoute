@@ -1,14 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDataDir } from "../_setup/tempDataDir.ts";
 
 const fixture = join(process.cwd(), "tests/fixtures/fake-zcode-app-server.mjs");
 const TEST_DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-zcode-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 
-test.after(() => rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
+test.after(() => cleanupTempDataDir(TEST_DATA_DIR));
 
 async function loadZcodeExecutor() {
   return import("../../open-sse/executors/zcode.ts");
@@ -26,6 +27,8 @@ function requestBody() {
 test("ZCode accepts GLM Coding Plan models and rejects unsafe/unknown ids", async () => {
   const { resolveZcodeModel } = await loadZcodeExecutor();
   assert.deepEqual(resolveZcodeModel("glm-5.2"), { ok: true, model: "glm-5.2" });
+  assert.equal(resolveZcodeModel("glm-5.2-high").ok, false);
+  assert.equal(resolveZcodeModel("glm-5.3-low").ok, false);
   assert.equal(resolveZcodeModel("-unexpected").ok, false);
   assert.equal(resolveZcodeModel("unknown-model").ok, false);
 });
@@ -70,7 +73,7 @@ test("ZCode buffers the completed turn into OpenAI SSE when stream=true", async 
   });
 
   const result = await executor.execute({
-    model: "glm-5.2-high",
+    model: "glm-5.2",
     body: requestBody(),
     stream: true,
     credentials: {},

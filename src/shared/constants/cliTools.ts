@@ -45,7 +45,7 @@ export const CLI_TOOLS: Record<string, CliCatalogEntry> = {
         name: "Claude Fable",
         alias: "fable",
         envKey: "ANTHROPIC_DEFAULT_FABLE_MODEL",
-        defaultValue: _cc.fable ? `cc/${_cc.fable}` : "cc/claude-fable-5",
+        defaultValue: _cc.fable ? `cc/${_cc.fable}` : "cc/claude-fable-5-1",
         isTopLevel: true,
       },
       {
@@ -110,7 +110,7 @@ export const CLI_TOOLS: Record<string, CliCatalogEntry> = {
   droid: {
     id: "droid",
     name: "Factory Droid",
-    image: "/providers/droid.svg",
+    image: "/providers/cli-generic.svg",
     color: "#00D4FF",
     description: "Factory AI Droid — BYOK assistant with configurable endpoint",
     docsUrl: "/docs?section=cli-tools&tool=droid",
@@ -184,7 +184,7 @@ export const CLI_TOOLS: Record<string, CliCatalogEntry> = {
   kilo: {
     id: "kilo",
     name: "Kilo Code",
-    image: "/providers/kilocode.svg",
+    image: "/providers/cli-generic.svg",
     color: "#FF6B6B",
     description: "Kilo Code — VS Code AI assistant with custom base URL support",
     docsUrl: "/docs?section=cli-tools&tool=kilocode",
@@ -279,8 +279,8 @@ export const CLI_TOOLS: Record<string, CliCatalogEntry> = {
   opencode: {
     id: "opencode",
     name: "OpenCode",
-    imageLight: "/providers/opencode-light.svg",
-    imageDark: "/providers/opencode-dark.svg",
+    imageLight: "/providers/cli-generic.svg",
+    imageDark: "/providers/cli-generic.svg",
     icon: "terminal",
     color: "#FF6B35",
     description: "OpenCode — AI coding agent CLI by Anomaly (terminal, multi-provider)",
@@ -593,6 +593,31 @@ aider --openai-api-base "{{baseUrl}}" --model "{{model}}"`,
   },
 
   /**
+   * ★ Added 2026-08-22 — Prime Agent (PrimeIntellect-ai/prime-agent).
+   * A self-improving RLM coding harness (TypeScript) whose LLM toolkit
+   * (prime-agent-ai) supports "any OpenAI-compatible API" + a dedicated
+   * "OpenAI Codex (ChatGPT Plus/Pro OAuth)" provider, so it can point at
+   * OmniRoute's OpenAI-compatible base URL like codex/forge. Installed via
+   * `curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh`;
+   * provider chosen at first run via `/login`.
+   */
+  "prime-agent": {
+    id: "prime-agent",
+    name: "Prime Agent",
+    icon: "terminal",
+    color: "#6366F1",
+    description:
+      "Prime Agent — self-improving RLM coding harness with OpenAI-compatible provider support",
+    docsUrl: "https://github.com/PrimeIntellect-ai/prime-agent",
+    configType: "custom",
+    category: "agent",
+    vendor: "Prime Intellect (OSS)",
+    acpSpawnable: false,
+    baseUrlSupport: "full",
+    defaultCommand: "prime-agent",
+  },
+
+  /**
    * ★ Added by plan 14 (CLI Pages Redesign) — 2026-05-27
    * Kept as a legacy/dual entry after CodeWhale (see below) took over as the
    * actively-maintained successor. Existing users who still have DeepSeek
@@ -746,14 +771,14 @@ OPENAI_API_KEY: "{{apiKey}}"`,
   omp: {
     id: "omp",
     name: "Oh My Pi",
-    image: "/providers/omp.png",
+    image: "/providers/cli-generic.svg",
     color: "#111111",
     docsUrl: "https://github.com/can1357/oh-my-pi",
     description: "Oh My Pi terminal coding agent via OmniRoute",
     configType: "custom",
     category: "agent",
     vendor: "OSS",
-    acpSpawnable: true,
+    acpSpawnable: false,
     baseUrlSupport: "full",
     defaultCommand: "omp",
     notes: [
@@ -763,7 +788,7 @@ OPENAI_API_KEY: "{{apiKey}}"`,
       },
       {
         type: "warning",
-        text: "Config path: Linux/macOS ~/.omp/agent/models.yml • Windows %USERPROFILE%\\.omp\\.omp\\agent\\models.yml",
+        text: "Config path: Linux/macOS ~/.omp/agent/models.yml • Windows %USERPROFILE%\\.omp\\agent\\models.yml",
       },
     ],
   },
@@ -771,7 +796,7 @@ OPENAI_API_KEY: "{{apiKey}}"`,
   letta: {
     id: "letta",
     name: "Letta CLI",
-    image: "/providers/letta.png",
+    image: "/providers/cli-generic.svg",
     color: "#FF6B35",
     description: "Letta CLI — AI agent with persistent memory and tool use",
     configType: "custom",
@@ -843,6 +868,45 @@ OPENAI_API_KEY: "{{apiKey}}"`,
       { step: 2, title: "API Key", type: "apiKeySelector" },
       { step: 3, title: "Base URL", value: "{{baseUrl}}", copyable: true },
       { step: 4, title: "Select Model", type: "modelSelector" },
+    ],
+  },
+
+  /** ★ 5dive agent fleets (diegosouzapw/OmniRoute#11578) — 2026-08-28 */
+  "5dive": {
+    id: "5dive",
+    name: "5dive",
+    icon: "hub",
+    color: "#7C3AED",
+    description:
+      "5dive — self-hosted fleet of long-running coding agents; one auth profile points every claude seat at OmniRoute",
+    docsUrl: "https://5dive.ai",
+    configType: "custom",
+    category: "agent",
+    vendor: "OSS (5dive-ai)",
+    acpSpawnable: false,
+    baseUrlSupport: "full",
+    defaultCommand: "5dive",
+    settingsFile: "/var/lib/5dive/auth-profiles/<profile>/combined.env",
+    guideSteps: [
+      {
+        step: 1,
+        title: "Run this on the fleet host",
+        desc: "5dive's verbs act on local systemd units; there is no remote mode",
+      },
+      { step: 2, title: "API Key", type: "apiKeySelector" },
+      { step: 3, title: "Base URL", value: "{{baseUrl}}", copyable: true },
+      { step: 4, title: "Select Model", type: "modelSelector" },
+      {
+        step: 5,
+        title: "Write the profile",
+        desc: "sudo omniroute configure 5dive --model <id> --auth-profile omniroute",
+      },
+    ],
+    notes: [
+      {
+        type: "warning",
+        text: "Writing a 5dive auth profile is root-only, and each agent's own runtime model pin outranks the profile's model default — pass --agent <name> to pin the seats too.",
+      },
     ],
   },
 };

@@ -26,6 +26,8 @@ npm install -g omniroute
 docker run -d --name omniroute -p 20128:20128 diegosouzapw/omniroute:latest
 ```
 
+`:latest` is the highest **published** stable SemVer. It does **not** track git `main`. Pin `diegosouzapw/omniroute:X.Y.Z` for GitOps. See [Image Tags / Release Channels](../guides/DOCKER_GUIDE.md#release-channels).
+
 ### Option C: From Source
 
 ```bash

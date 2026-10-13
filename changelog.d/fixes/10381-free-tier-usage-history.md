@@ -1,1 +1,0 @@
-- fix(dashboard): Free Tier 'used this month' now includes live usage_history rows, not just the rolled-up daily summary (#10381)

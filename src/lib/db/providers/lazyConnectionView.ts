@@ -9,7 +9,8 @@
  * admin, and catalog callers during Phase 2/3 of the lazy-decrypt rollout.
  */
 
-import { decrypt } from "../encryption";
+import { decryptQuiet } from "../encryption";
+import type { ConnectionRateLimitOverrides } from "./columns";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -61,7 +62,14 @@ export interface ProviderConnectionView {
   errorCode: string | number | null;
   backoffLevel: number;
   maxConcurrent: number | null;
+  rateLimitMaxConcurrent: number | null;
   quotaWindowThresholds: Record<string, number> | null;
+  /**
+   * Per-connection rate limit overrides as parsed from the JSON column.
+   * Carries the optional nested `modelConcurrency` map; the chat core
+   * normalizes that map (fail-open) onto credentials at selection time.
+   */
+  rateLimitOverrides: ConnectionRateLimitOverrides | null;
 }
 
 /**
@@ -70,10 +78,16 @@ export interface ProviderConnectionView {
  */
 export function toProviderConnection(value: unknown): ProviderConnectionView {
   const row = asRecord(value);
+  const rateLimitMaxConcurrent = toNullableNumber(asRecord(row.rateLimitOverrides).maxConcurrent);
   const rawThresholds = row.quotaWindowThresholds;
   const quotaWindowThresholds: Record<string, number> | null =
     rawThresholds && typeof rawThresholds === "object" && !Array.isArray(rawThresholds)
       ? (rawThresholds as Record<string, number>)
+      : null;
+  const rawOverrides = row.rateLimitOverrides;
+  const rateLimitOverrides: ConnectionRateLimitOverrides | null =
+    rawOverrides && typeof rawOverrides === "object" && !Array.isArray(rawOverrides)
+      ? (rawOverrides as ConnectionRateLimitOverrides)
       : null;
   return {
     id: toStringOrNull(row.id) || "",
@@ -101,7 +115,10 @@ export function toProviderConnection(value: unknown): ProviderConnectionView {
       typeof row.errorCode === "string" || typeof row.errorCode === "number" ? row.errorCode : null,
     backoffLevel: toNumber(row.backoffLevel, 0),
     maxConcurrent: toNullableNumber(row.maxConcurrent),
+    rateLimitMaxConcurrent:
+      rateLimitMaxConcurrent !== null && rateLimitMaxConcurrent > 0 ? rateLimitMaxConcurrent : null,
     quotaWindowThresholds,
+    rateLimitOverrides,
   };
 }
 
@@ -119,10 +136,18 @@ export function createLazyConnectionView(row: Record<string, unknown>): Provider
 
   const ensureDecrypted = () => {
     if (!decrypted) {
+      const connectionId = base.id;
+      const provider = base.provider;
       decrypted = {
-        apiKey: toStringOrNull(decrypt(base.apiKey)),
-        accessToken: toStringOrNull(decrypt(base.accessToken)),
-        refreshToken: toStringOrNull(decrypt(base.refreshToken)),
+        apiKey: toStringOrNull(
+          decryptQuiet(base.apiKey, { connectionId, provider, field: "apiKey" })
+        ),
+        accessToken: toStringOrNull(
+          decryptQuiet(base.accessToken, { connectionId, provider, field: "accessToken" })
+        ),
+        refreshToken: toStringOrNull(
+          decryptQuiet(base.refreshToken, { connectionId, provider, field: "refreshToken" })
+        ),
       };
     }
     return decrypted;
@@ -154,11 +179,17 @@ export function createLazyRowProxy(row: Record<string, unknown>): Record<string,
 
   const ensureDecrypted = () => {
     if (!decrypted) {
+      const connectionId = typeof row.id === "string" ? row.id : "";
+      const provider = typeof row.provider === "string" ? row.provider : "unknown";
       decrypted = {
-        apiKey: lazyDecrypt(row.apiKey),
-        accessToken: lazyDecrypt(row.accessToken),
-        refreshToken: lazyDecrypt(row.refreshToken),
-        idToken: lazyDecrypt(row.idToken),
+        apiKey: lazyDecrypt(row.apiKey, { connectionId, provider, field: "apiKey" }),
+        accessToken: lazyDecrypt(row.accessToken, { connectionId, provider, field: "accessToken" }),
+        refreshToken: lazyDecrypt(row.refreshToken, {
+          connectionId,
+          provider,
+          field: "refreshToken",
+        }),
+        idToken: lazyDecrypt(row.idToken, { connectionId, provider, field: "idToken" }),
       };
     }
     return decrypted;
@@ -189,7 +220,10 @@ export function createLazyRowProxy(row: Record<string, unknown>): Record<string,
   });
 }
 
-function lazyDecrypt(value: unknown): string | null | undefined {
+function lazyDecrypt(
+  value: unknown,
+  meta: { connectionId: string; provider: string; field: string }
+): string | null | undefined {
   if (typeof value !== "string") return undefined;
-  return decrypt(value);
+  return decryptQuiet(value, meta);
 }

@@ -29,6 +29,26 @@ test("scene-aware sampling falls back to deterministic uniform midpoints for a s
   assert.equal(decision.candidateCount, 0);
 });
 
+test("scene-aware sampling falls back to the midpoint when one frame cannot cover both ends", () => {
+  const decision = calculateSamplingDecision(8, 1, "scene_aware", [0.25, 7.75]);
+
+  assert.deepEqual(decision.timestamps, [4]);
+  assert.equal(decision.policyRequested, "scene_aware");
+  assert.equal(decision.policyEffective, "uniform");
+  assert.equal(decision.candidateCount, 2);
+});
+
+test("one-frame scene-aware fallback uses the active focus-window midpoint", () => {
+  const decision = calculateSamplingDecision(10, 1, "scene_aware", [2.25, 7.75], {
+    endSeconds: 8,
+    startSeconds: 2,
+  });
+
+  assert.deepEqual(decision.timestamps, [5]);
+  assert.equal(decision.policyEffective, "uniform");
+  assert.deepEqual(decision.focusWindow, { endSeconds: 8, startSeconds: 2 });
+});
+
 test("scene candidates are parsed from showinfo output and malformed values are ignored", () => {
   const output = [
     "[Parsed_showinfo_0 @ 0x1] n:1 pts_time:1.250",

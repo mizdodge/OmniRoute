@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
-import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assembleStandalone } from "./assembleStandalone.mjs";
 import { assertSqlitePrebuildExists } from "./electronRebuildPlan.mjs";
 import { pruneElectronRuntimeDocs } from "./electronRuntimeDocs.mjs";
 import { stageOptionalPacks } from "./optionalPackStaging.mjs";
+import { runBuildTool } from "./buildToolRunner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -169,6 +170,27 @@ assembleStandalone({
   // app they would point at the build machine's absolute paths and break on install.
   materializeSymlinks: true,
 });
+const compressionWorkerDest = join(
+  ELECTRON_STANDALONE_DIR,
+  "open-sse",
+  "services",
+  "compression",
+  "compressionWorker.js"
+);
+mkdirSync(dirname(compressionWorkerDest), { recursive: true });
+runBuildTool(
+  "esbuild",
+  "esbuild",
+  [
+    join(ROOT, "open-sse", "services", "compression", "compressionWorker.ts"),
+    "--bundle",
+    "--platform=node",
+    "--packages=external",
+    "--format=esm",
+    `--outfile=${compressionWorkerDest}`,
+  ],
+  { stdio: "inherit" }
+);
 
 const docsPrune = pruneElectronRuntimeDocs(ELECTRON_STANDALONE_DIR);
 if (docsPrune.removedFiles > 0) {

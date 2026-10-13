@@ -57,6 +57,7 @@ test("agy ships its own live callable model catalog", () => {
   assert.ok(!ids.includes("gemini-3.6-flash-low"));
   assert.ok(!ids.includes("gemini-3.6-flash-medium"));
   assert.ok(!ids.includes("gemini-3.6-flash-high"));
+  assert.ok(!ids.includes("gemini-3.5-flash"));
   assert.ok(!ids.includes("gemini-3.5-flash-extra-low"));
   assert.ok(!ids.includes("gemini-3.5-flash-low"));
   assert.ok(!ids.includes("gemini-3-flash-agent"));
@@ -87,6 +88,7 @@ test("agy model helpers resolve catalog ids and display names", () => {
   assert.equal(isUserCallableAgyModelId("gemini-3.6-flash-low"), false);
   assert.equal(isUserCallableAgyModelId("gemini-3.6-flash-medium"), false);
   assert.equal(isUserCallableAgyModelId("gemini-3.6-flash-high"), false);
+  assert.equal(isUserCallableAgyModelId("gemini-3.5-flash"), false);
   assert.equal(isUserCallableAgyModelId("gemini-3.5-flash-extra-low"), false);
   assert.equal(isUserCallableAgyModelId("gemini-3.5-flash-low"), false);
   assert.equal(isUserCallableAgyModelId("gemini-3-flash-agent"), false);
@@ -117,6 +119,18 @@ test("agy live discovery accepts new chat models while excluding tab-completion 
   assert.equal(isDiscoverableAgyModelId("tab_flash_lite_preview"), false);
   assert.equal(isDiscoverableAgyModelId("tab_jump_flash_lite_preview"), false);
   assert.equal(isDiscoverableAgyModelId(""), false);
+});
+
+const quotaNormalize = await import("../../src/lib/usage/providerLimits/quotaNormalize.ts");
+
+test("test 9: agy live catalog is authoritative; quota keys use discoverable denylist", () => {
+  assert.equal(REGISTRY.agy.liveCatalogAuthoritative, true);
+  assert.equal(REGISTRY.antigravity.liveCatalogAuthoritative, true);
+  const { isUsageQuotaKeyAllowed } = quotaNormalize;
+  assert.equal(isDiscoverableAgyModelId("gemini-new-live-tier"), true);
+  assert.equal(isUsageQuotaKeyAllowed("agy", "gemini-new-live-tier"), true);
+  assert.equal(isUserCallableAgyModelId("gemini-new-live-tier"), false);
+  assert.equal(isUsageQuotaKeyAllowed("agy", "tab_flash_lite_preview"), false);
 });
 
 test("agy token refresh is wired on the Google (non-rotating) refresh path", () => {

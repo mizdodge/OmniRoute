@@ -1,1 +1,0 @@
-- fix(providers): GitLab Duo falls back to the public Code Suggestions endpoint when direct_access returns 401 (#10365)

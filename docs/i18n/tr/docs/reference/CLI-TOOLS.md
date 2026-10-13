@@ -1,202 +1,199 @@
-# CLI-TOOLS (Türkçe)
+# CLI Tools — OmniRoute (Türkçe)
 
-🌐 **Languages:** 🇺🇸 [English](../../../../reference/CLI-TOOLS.md) · 🇸🇦 [ar](../../../ar/docs/reference/CLI-TOOLS.md) · 🇦🇿 [az](../../../az/docs/reference/CLI-TOOLS.md) · 🇧🇬 [bg](../../../bg/docs/reference/CLI-TOOLS.md) · 🇧🇩 [bn](../../../bn/docs/reference/CLI-TOOLS.md) · 🇨🇿 [cs](../../../cs/docs/reference/CLI-TOOLS.md) · 🇩🇰 [da](../../../da/docs/reference/CLI-TOOLS.md) · 🇩🇪 [de](../../../de/docs/reference/CLI-TOOLS.md) · 🇪🇸 [es](../../../es/docs/reference/CLI-TOOLS.md) · 🇮🇷 [fa](../../../fa/docs/reference/CLI-TOOLS.md) · 🇫🇮 [fi](../../../fi/docs/reference/CLI-TOOLS.md) · 🇫🇷 [fr](../../../fr/docs/reference/CLI-TOOLS.md) · 🇮🇳 [gu](../../../gu/docs/reference/CLI-TOOLS.md) · 🇮🇱 [he](../../../he/docs/reference/CLI-TOOLS.md) · 🇮🇳 [hi](../../../hi/docs/reference/CLI-TOOLS.md) · 🇭🇺 [hu](../../../hu/docs/reference/CLI-TOOLS.md) · 🇮🇩 [id](../../../id/docs/reference/CLI-TOOLS.md) · 🇮🇩 [in](../../../in/docs/reference/CLI-TOOLS.md) · 🇮🇹 [it](../../../it/docs/reference/CLI-TOOLS.md) · 🇯🇵 [ja](../../../ja/docs/reference/CLI-TOOLS.md) · 🇰🇷 [ko](../../../ko/docs/reference/CLI-TOOLS.md) · 🇮🇳 [mr](../../../mr/docs/reference/CLI-TOOLS.md) · 🇲🇾 [ms](../../../ms/docs/reference/CLI-TOOLS.md) · 🇳🇱 [nl](../../../nl/docs/reference/CLI-TOOLS.md) · 🇳🇴 [no](../../../no/docs/reference/CLI-TOOLS.md) · 🇵🇭 [phi](../../../phi/docs/reference/CLI-TOOLS.md) · 🇵🇱 [pl](../../../pl/docs/reference/CLI-TOOLS.md) · 🇵🇹 [pt](../../../pt/docs/reference/CLI-TOOLS.md) · 🇧🇷 [pt-BR](../../../pt-BR/docs/reference/CLI-TOOLS.md) · 🇷🇴 [ro](../../../ro/docs/reference/CLI-TOOLS.md) · 🇷🇺 [ru](../../../ru/docs/reference/CLI-TOOLS.md) · 🇸🇰 [sk](../../../sk/docs/reference/CLI-TOOLS.md) · 🇸🇪 [sv](../../../sv/docs/reference/CLI-TOOLS.md) · 🇰🇪 [sw](../../../sw/docs/reference/CLI-TOOLS.md) · 🇮🇳 [ta](../../../ta/docs/reference/CLI-TOOLS.md) · 🇮🇳 [te](../../../te/docs/reference/CLI-TOOLS.md) · 🇹🇭 [th](../../../th/docs/reference/CLI-TOOLS.md) · 🇺🇦 [uk-UA](../../../uk-UA/docs/reference/CLI-TOOLS.md) · 🇵🇰 [ur](../../../ur/docs/reference/CLI-TOOLS.md) · 🇻🇳 [vi](../../../vi/docs/reference/CLI-TOOLS.md) · 🇨🇳 [zh-CN](../../../zh-CN/docs/reference/CLI-TOOLS.md) · 🇹🇼 [zh-TW](../../../zh-TW/docs/reference/CLI-TOOLS.md)
-
----
+🌐 **Languages:** 🇺🇸 [English](../../../../reference/CLI-TOOLS.md) · 🇪🇹 [am](../../../am/docs/reference/CLI-TOOLS.md) · 🇸🇦 [ar](../../../ar/docs/reference/CLI-TOOLS.md) · 🇦🇿 [az](../../../az/docs/reference/CLI-TOOLS.md) · 🇧🇬 [bg](../../../bg/docs/reference/CLI-TOOLS.md) · 🇧🇩 [bn](../../../bn/docs/reference/CLI-TOOLS.md) · 🇧🇦 [bs](../../../bs/docs/reference/CLI-TOOLS.md) · 🇨🇿 [cs](../../../cs/docs/reference/CLI-TOOLS.md) · 🇩🇰 [da](../../../da/docs/reference/CLI-TOOLS.md) · 🇩🇪 [de](../../../de/docs/reference/CLI-TOOLS.md) · 🇬🇷 [el](../../../el/docs/reference/CLI-TOOLS.md) · 🇪🇸 [es](../../../es/docs/reference/CLI-TOOLS.md) · 🇪🇪 [et](../../../et/docs/reference/CLI-TOOLS.md) · 🇮🇷 [fa](../../../fa/docs/reference/CLI-TOOLS.md) · 🇫🇮 [fi](../../../fi/docs/reference/CLI-TOOLS.md) · 🇫🇷 [fr](../../../fr/docs/reference/CLI-TOOLS.md) · 🇮🇪 [ga](../../../ga/docs/reference/CLI-TOOLS.md) · 🇮🇳 [gu](../../../gu/docs/reference/CLI-TOOLS.md) · 🇳🇬 [ha](../../../ha/docs/reference/CLI-TOOLS.md) · 🇮🇱 [he](../../../he/docs/reference/CLI-TOOLS.md) · 🇮🇳 [hi](../../../hi/docs/reference/CLI-TOOLS.md) · 🇭🇷 [hr](../../../hr/docs/reference/CLI-TOOLS.md) · 🇭🇺 [hu](../../../hu/docs/reference/CLI-TOOLS.md) · 🇦🇲 [hy](../../../hy/docs/reference/CLI-TOOLS.md) · 🇮🇩 [id](../../../id/docs/reference/CLI-TOOLS.md) · 🇳🇬 [ig](../../../ig/docs/reference/CLI-TOOLS.md) · 🇮🇹 [it](../../../it/docs/reference/CLI-TOOLS.md) · 🇯🇵 [ja](../../../ja/docs/reference/CLI-TOOLS.md) · 🇬🇪 [ka](../../../ka/docs/reference/CLI-TOOLS.md) · 🇰🇭 [km](../../../km/docs/reference/CLI-TOOLS.md) · 🇮🇳 [kn](../../../kn/docs/reference/CLI-TOOLS.md) · 🇰🇷 [ko](../../../ko/docs/reference/CLI-TOOLS.md) · 🇱🇹 [lt](../../../lt/docs/reference/CLI-TOOLS.md) · 🇱🇻 [lv](../../../lv/docs/reference/CLI-TOOLS.md) · 🇮🇳 [ml](../../../ml/docs/reference/CLI-TOOLS.md) · 🇮🇳 [mr](../../../mr/docs/reference/CLI-TOOLS.md) · 🇲🇾 [ms](../../../ms/docs/reference/CLI-TOOLS.md) · 🇲🇹 [mt](../../../mt/docs/reference/CLI-TOOLS.md) · 🇲🇲 [my](../../../my/docs/reference/CLI-TOOLS.md) · 🇳🇵 [ne](../../../ne/docs/reference/CLI-TOOLS.md) · 🇳🇱 [nl](../../../nl/docs/reference/CLI-TOOLS.md) · 🇳🇴 [no](../../../no/docs/reference/CLI-TOOLS.md) · 🇮🇳 [or](../../../or/docs/reference/CLI-TOOLS.md) · 🇮🇳 [pa](../../../pa/docs/reference/CLI-TOOLS.md) · 🇵🇭 [phi](../../../phi/docs/reference/CLI-TOOLS.md) · 🇵🇱 [pl](../../../pl/docs/reference/CLI-TOOLS.md) · 🇵🇹 [pt](../../../pt/docs/reference/CLI-TOOLS.md) · 🇧🇷 [pt-BR](../../../pt-BR/docs/reference/CLI-TOOLS.md) · 🇷🇴 [ro](../../../ro/docs/reference/CLI-TOOLS.md) · 🇷🇺 [ru](../../../ru/docs/reference/CLI-TOOLS.md) · 🇱🇰 [si](../../../si/docs/reference/CLI-TOOLS.md) · 🇸🇰 [sk](../../../sk/docs/reference/CLI-TOOLS.md) · 🇸🇮 [sl](../../../sl/docs/reference/CLI-TOOLS.md) · 🇷🇸 [sr](../../../sr/docs/reference/CLI-TOOLS.md) · 🇸🇪 [sv](../../../sv/docs/reference/CLI-TOOLS.md) · 🇰🇪 [sw](../../../sw/docs/reference/CLI-TOOLS.md) · 🇮🇳 [ta](../../../ta/docs/reference/CLI-TOOLS.md) · 🇮🇳 [te](../../../te/docs/reference/CLI-TOOLS.md) · 🇹🇭 [th](../../../th/docs/reference/CLI-TOOLS.md) · 🇺🇦 [uk-UA](../../../uk-UA/docs/reference/CLI-TOOLS.md) · 🇵🇰 [ur](../../../ur/docs/reference/CLI-TOOLS.md) · 🇺🇿 [uz](../../../uz/docs/reference/CLI-TOOLS.md) · 🇻🇳 [vi](../../../vi/docs/reference/CLI-TOOLS.md) · 🇳🇬 [yo](../../../yo/docs/reference/CLI-TOOLS.md) · 🇨🇳 [zh-CN](../../../zh-CN/docs/reference/CLI-TOOLS.md) · 🇹🇼 [zh-TW](../../../zh-TW/docs/reference/CLI-TOOLS.md)
 
 ---
 
-title: "CLI Araçları — OmniRoute"
-version: 3.8.50
-lastUpdated: 2026-08-18
----
+Son güncelleme: 2026-08-23
 
-# CLI Araçları — OmniRoute
+OmniRoute, üç özel pano sayfasına yayılmış üç CLI aracı kategorisiyle entegre olur:
 
-Son güncelleme: 2026-08-18
-
-OmniRoute, üç özel kontrol paneli sayfasında dağıtılmış üç kategori CLI aracı ile entegre olur:
-
-| Sayfa            | Rota                    | Kavram                                                                                | Sayı                  |
-| ---------------- | ----------------------- | ------------------------------------------------------------------------------------- | --------------------- |
-| **CLI Kodu**     | `/dashboard/cli-code`   | OmniRoute'a yönlendirdiğiniz kodlama araçları (Müşteri → CLI → OmniRoute → Sağlayıcı) | 26                    |
-| **CLI Ajanları** | `/dashboard/cli-agents` | OmniRoute'a yönlendirdiğiniz otonom ajanlar (aynı akış, daha geniş kapsam)            | 8                     |
-| **ACP Ajanları** | `/dashboard/acp-agents` | OmniRoute'un stdio/ACP aracılığıyla arka planda oluşturduğu CLIs (ters akış)          | kayıt defterine bakın |
+| Sayfa          | Rota                    | Kavram                                                                                | Sayı                  |
+| -------------- | ----------------------- | ------------------------------------------------------------------------------------- | --------------------- |
+| **CLI Code's** | `/dashboard/cli-code`   | OmniRoute'a yönlendirdiğiniz kodlama araçları (İstemci → CLI → OmniRoute → Sağlayıcı) | 26                    |
+| **CLI Agents** | `/dashboard/cli-agents` | OmniRoute'a yönlendirdiğiniz otonom ajanlar (aynı akış, daha geniş kapsam)            | 10                    |
+| **ACP Agents** | `/dashboard/acp-agents` | OmniRoute'un stdio/ACP aracılığıyla arka uç olarak başlattığı CLI'lar (ters akış)     | kayıt defterine bakın |
 
 Eski rotalar 308 ile yönlendirilir: `/dashboard/cli-tools` → `/dashboard/cli-code`, `/dashboard/agents` → `/dashboard/acp-agents`.
 
 ---
 
-## Nasıl Çalışır
+## Nasıl Çalışır?
 
 ```
-CLI Kodu / CLI Ajanları (tüketim akışı):
-Claude / Codex / OpenCode / Cline / KiloCode / Continue / Hermes Ajanı / Goose / ...
+CLI Code's / CLI Agents (tüketim akışı):
+Claude / Codex / OpenCode / Cline / KiloCode / Continue / Hermes Agent / Goose / ...
            │
-           ▼  (hepsi OmniRoute'a yönlendirir)
+           ▼  (tümü OmniRoute'a yönlendirilir)
     http://YOUR_SERVER:20128/v1
            │
-           ▼  (OmniRoute doğru sağlayıcıya yönlendirir)
+           ▼  (OmniRoute, isteği doğru sağlayıcıya yönlendirir)
     Anthropic / OpenAI / Gemini / DeepSeek / Groq / Mistral / ...
 
-ACP Ajanları (ters oluşturma akışı):
-    Müşteri isteği → OmniRoute → stdio/ACP aracılığıyla CLI oluşturur → yanıt
+ACP Agents (ters başlatma akışı):
+    İstemci isteği → OmniRoute → CLI'ı stdio/ACP aracılığıyla başlatır → yanıt
 ```
 
-**Faydalar:**
+**Avantajlar:**
 
 - Tüm araçları yönetmek için tek bir API anahtarı
-- Kontrol panelindeki tüm CLIs arasında maliyet takibi
+- Panoda tüm CLI'lar genelinde maliyet takibi
 - Her aracı yeniden yapılandırmadan model değiştirme
-- Yerel ve uzaktan sunucularda (VPS, Docker, Akamai, Cloudflare Tüneli) çalışır
+- Yerel olarak ve uzak sunucularda çalışır (VPS, Docker, Akamai, Cloudflare Tunnel)
 
 ---
 
 ## `setup-*` ile Otomatik Yapılandırma
 
-Her aracın yapılandırmasını elle yazmak zorunda değilsiniz. OmniRoute, çalışan bir
-OmniRoute'tan (yerel veya uzaktan) **canlı** model kataloğunu okuyan ve aracın kendi
-yapılandırmasını makinenize yazan her desteklenen CLI için bir `setup-*`
-komutu gönderir:
+Her aracın yapılandırmasını elle yazmak zorunda değilsiniz. OmniRoute, desteklenen her CLI için, çalışan bir OmniRoute'tan (yerel veya uzak) **canlı** model kataloğunu okuyan ve aracın kendi yapılandırmasını makinenize yazan bir `setup-*` komutu sunar:
 
 ```bash
 omniroute setup-codex        omniroute setup-claude       omniroute setup-opencode
 omniroute setup-cline        omniroute setup-kilo         omniroute setup-continue
 omniroute setup-cursor       omniroute setup-roo          omniroute setup-crush
 omniroute setup-goose        omniroute setup-qwen         omniroute setup-aider
+omniroute setup-5dive
 ```
 
-Her biri `--remote <url> --api-key <key>` (uzaktaki bir OmniRoute'a karşı yerel bir aracı yapılandırma), `--dry-run` (yazmadan önizleme) ve `--port` alır. Model otomatik keşfi olmayan araçlar (Cline, Kilo, Roo, Goose, Aider, Qwen) `--model <id>` (ve etkileşimsiz çalıştırmalar için `--yes`) alır. Doğru ortamın enjekte edildiği ve hiç yapılandırma yazılmadan bir CLI başlatmak için, genel `omniroute run <target>` başlatıcısını kullanın (claude, codex, aider, goose, opencode, qwen, gemini — hedefler ve takma adlar `bin/cli/cli-manifest.mjs`'den gelir); eski her araç için başlatıcılar `omniroute launch` (Claude Kodu) ve `omniroute launch-codex` (Codex) kullanılmaya devam eder. Gemini CLI yalnızca başlatma içindir: bir `omniroute run` hedefidir ancak `setup-*`/`configure` tarifi yoktur.
+Her biri `--remote <url> --api-key <key>` (uzak bir OmniRoute'a karşı yerel bir aracı yapılandırma), `--dry-run` (yazmadan önizleme) ve `--port` parametrelerini kabul eder. Model otomatik keşfi olmayan araçlar (Cline, Kilo, Roo, Goose, Aider, Qwen, 5dive) `--model <id>` (ve etkileşimsiz çalıştırmalar için `--yes`) parametresini alır. `setup-5dive`, `$HOME` altına yazmayan tek tariftir: filo ana bilgisayarında kök sahipli bir kimlik doğrulama profili yazarak bir 5dive aracı filosunu yapılandırır, bu nedenle `sudo` aracılığıyla yeniden yürütülür ve kendi uzak modu yoktur. Doğru ortam enjekte edilmiş ve hiç yapılandırma yazılmamış bir CLI başlatmak için genel `omniroute run <target>` başlatıcısını kullanın (claude, codex, aider, goose, opencode, qwen, gemini — hedefler ve takma adlar `bin/cli/cli-manifest.mjs` dosyasından gelir); eski araç başına başlatıcılar `omniroute launch` (Claude Code) ve `omniroute launch-codex` (Codex) hala mevcuttur. Gemini CLI yalnızca başlatma amaçlıdır: bir `omniroute run` hedefidir ancak `setup-*`/`configure` tarifi yoktur.
 
-> **Tam referans:** her komutun ne yazdığı, her bayrak, yerel ve uzaktan, ve hangi araçların `/v1` son ekine ihtiyaç duyduğuna dair ana tablo **[CLI Entegrasyonları](../guides/CLI-INTEGRATIONS.md)**'nda bulunmaktadır.
+> **Tam referans:** her komutun ne yazdığı, her bayrak, yerel ve uzak arasındaki farklar ve hangi araçların `/v1` soneki istediği gibi ana tablo **[CLI Entegrasyonları](../guides/CLI-INTEGRATIONS.md)** bölümünde yer almaktadır.
 
-### Bir konteyner içinde bunları çalıştırma
+### Bunları bir kapsayıcı içinde çalıştırma
 
-OmniRoute konteyneri içinde yürütülen bir `setup-*` komutu, konteynerin kendi evine yazar, bu da hiçbir ana CLI tarafından okunmaz ve konteyner ile birlikte kaybolur. OmniRoute bunu algılar ve yazmak yerine talimatlarla `2` ile çıkar. İki desteklenen yol — CLI'yi ana makinede kurmak ve konteynere `omniroute connect` yapmak veya yapılandırma dizinlerini bağlamak ve `CLI_CONFIG_HOME` ayarlamaktır (compose `host` profili). Her `setup-*` komutu, ayrıca `omniroute configure` ve `omniroute config set`, konteynerin kendi CLIs'ini yapılandırmanın gerçekten ne anlama geldiği durumunda `--allow-container-write` alır; `OMNIROUTE_ALLOW_CONTAINER_CONFIG_WRITE=true` sunucu için aynı şeyi yapar. Bakınız
-[Docker Kılavuzu → Ana CLI araçlarını yapılandırma](../guides/DOCKER_GUIDE.md#configuring-host-cli-tools-when-omniroute-runs-in-docker).
+OmniRoute kapsayıcısı içinde yürütülen bir `setup-*` komutu, kapsayıcının kendi ana dizinine yazar; bu dizin hiçbir ana bilgisayar CLI'si tarafından okunmaz ve kapsayıcıyla birlikte kaybolur. OmniRoute bunu algılar ve yazmak yerine talimatlarla birlikte `2` koduyla çıkar. İki desteklenen yol vardır — CLI'yi ana bilgisayara kurup kapsayıcıya `omniroute connect` yapmak veya yapılandırma dizinlerini bağlayıp `CLI_CONFIG_HOME`'u (compose `host` profili) ayarlamak. Her `setup-*` komutu, ayrıca `omniroute configure` ve `omniroute config set`, kapsayıcının kendi CLI'larını yapılandırmak istediğinizde `--allow-container-write` parametresini kabul eder; `OMNIROUTE_ALLOW_CONTAINER_CONFIG_WRITE=true` sunucu için de aynısını yapar. [Docker Kılavuzu → Ana bilgisayar CLI araçlarını yapılandırma](../guides/DOCKER_GUIDE.md#configuring-host-cli-tools-when-omniroute-runs-in-docker) bölümüne bakın.
 
-Kontrol panelinin **uygulama uç noktası** (`POST /api/cli-tools/apply`) aynı korumayı uygular: bir konteynerde, hedefi ana makineden bağlanmamış bir yazma işlemi **`422`** ile `containerEphemeralTarget: true` yanıtını verir, güvenli hata metni ve — ana makine tarifi olan araçlar için (claude, codex, opencode, cline, kilo, continue) — ana makinede çalıştırılacak bir `hostSetupCommand` (örneğin `omniroute setup-opencode`); hiçbir şey yazılmaz. `dryRun: true` konteyner modunda çalışmaya devam eder ve diskle temas etmeden üretilen içeriği + hedef yolunu döndürür, böylece kontrol panelinden önizleme yapabilir ve ana makinede uygulayabilirsiniz. Bu davranış kasıtlıdır ve `tests/unit/api/cli-tools/apply-container-guard.test.ts` ile geriye dönük olarak korunmaktadır — asla bir 422'yi korumayı kaldırarak "düzeltmeyin".
-
----
-
-## Gerçek Kaynağı
-
-Birleşik katalog `src/shared/constants/cliTools.ts` içinde `CLI_TOOLS: Record<string, CliCatalogEntry>` olarak yer almaktadır.
-
-Her bir girişin bu alanları vardır (tanımlı `src/shared/schemas/cliCatalog.ts` içinde):
-
-| Alan                                            | Tür                                                          | Açıklama                                               |
-| ----------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------ |
-| `category`                                      | `"code" \| "agent"`                                          | Araç hangi sayfada görünür                             |
-| `vendor`                                        | `string`                                                     | Araç kaynağı ("Anthropic", "OSS (P. Gauthier)")        |
-| `acpSpawnable`                                  | `boolean`                                                    | ACP Ajanı olarak da kullanılabilir (rozet gösterilir)  |
-| `baseUrlSupport`                                | `"full" \| "partial" \| "none"`                              | Özel uç nokta destek seviyesi. `"none"` = MITM backlog |
-| `configType`                                    | `"env" \| "custom" \| "guide" \| "custom-builder" \| "mitm"` | Yapılandırma mekanizması                               |
-| `id`, `name`, `color`, `description`, `docsUrl` | standart                                                     | Temel görüntüleme alanları                             |
-
-`baseUrlSupport: "none"` olan girişler, gösterim sayfalarında **gösterilmez** — bunlar plan 11 için MITM backlog'unda kaydedilmiştir (bkz. `_tasks/features-v3.8.6/refactorpages/_orchestration/_plan11-mitm-backlog.md`).
-
-### Yetenek katmanları (kataloglu × tespit edilebilir × yapılandırılabilir × başlatılabilir)
-
-Her kataloglu araç tespit edilebilir, yapılandırılabilir veya başlatılabilir değildir. Her katmanın bir
-belirleyici kaynağı vardır ve bir drift testi bunları uyumlu tutar:
-
-| Katman                 | Anlamı                                                                         | Belirtilen                                                         |
-| ---------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| **Kataloglu**          | Gösterim katalogunda görünür (isim, satıcı, belgeler, yapılandırma türü)       | `src/shared/constants/cliTools.ts` (`CLI_TOOLS`)                   |
-| **Tespit Edilebilir**  | İkili/yapılandırma tespiti, sağlık kontrolleri, yapılandırma yolları           | `src/shared/services/cliRuntime.ts` (`CLI_TOOLS` çalışma kataloğu) |
-| **Yapılandırılabilir** | `omniroute configure <cli>` tarafından desteklenir (kurulum tarifi mevcut)     | `bin/cli/cli-manifest.mjs` (`configure: true`)                     |
-| **Başlatılabilir**     | `omniroute run <target>` tarafından desteklenir (env/args enjeksiyonu tanımlı) | `bin/cli/cli-manifest.mjs` (`run: true`)                           |
-
-`bin/cli/cli-manifest.mjs`, CLI komut yüzeyleri için kanonik yürütülebilir manifestodur: `run`, `configure` ve shell-tamamlayıcı jeneratörleri tüm hedef listelerini, takma ad çözümlemelerini (örneğin `kilocode`/`kilo-code`/`kilo_cli` → `kilo`) ve `--model` bayrağı bağlantılarını buradan alır. Drift koruma
-`tests/unit/cli/cli-manifest-drift.test.ts`, manifestonun, çalışma
-kataloğunun, UI kataloğunun ve her tüketici yüzeyinin senkron kalmasını sağlar — bir yüzeye eklenen bir hedef, diğerleri olmadan eklenirse, sessizce drift etmek yerine test grubunu başarısız kılar.
-
-## 1. CLI Kod Kataloğu (26 araç)
-
-`/dashboard/cli-code` içinde yer alan tüm araçlar. `baseUrlSupport: none` olanlar, özel bir temel URL yerine MITM veya manuel bir kılavuz aracılığıyla bağlanmıştır:
-
-| id           | isim                      | satıcı                        | baseUrlSupport | configType     | acpSpawnable |
-| ------------ | ------------------------- | ----------------------------- | -------------- | -------------- | ------------ |
-| claude       | Claude Kodu               | Anthropic                     | full           | env            | true         |
-| codex        | OpenAI Codex CLI          | OpenAI                        | full           | custom         | true         |
-| zcode        | ZCode (GLM Kodlama Planı) | Z.ai                          | none           | custom         | false        |
-| cline        | Cline                     | OSS (eski-Claude Geliştirici) | full           | custom         | true         |
-| kilo         | Kilo Kodu                 | Kilo-Org                      | full           | custom         | false        |
-| roo          | Roo Kodu                  | Roo (OSS)                     | full           | guide          | false        |
-| continue     | Devam Et                  | continue.dev                  | full           | guide          | false        |
-| aider        | Aider                     | OSS (P. Gauthier)             | full           | guide          | true         |
-| forge        | ForgeCode                 | Antinomy HQ                   | full           | custom         | true         |
-| jcode        | jcode                     | 1jehuang (OSS)                | full           | custom         | false        |
-| deepseek-tui | DeepSeek TUI              | Hunter Bown (OSS)             | full           | custom         | false        |
-| codewhale    | CodeWhale                 | Hmbown (OSS)                  | full           | custom         | false        |
-| opencode     | OpenCode                  | Anomaly (eski-SST)            | full           | guide          | true         |
-| droid        | Factory Droid             | Factory AI                    | partial        | guide          | false        |
-| copilot      | GitHub Copilot CLI        | GitHub/MS                     | full           | custom         | false        |
-| cursor-cli   | Cursor CLI                | Anysphere                     | partial        | guide          | true         |
-| smelt        | Smelt                     | leonardcser (OSS)             | full           | custom         | false        |
-| pi           | Pi (pi-coding-agent)      | M. Zechner (OSS)              | full           | custom         | false        |
-| grok-build   | Grok Build                | xAI                           | full           | custom         | false        |
-| crush        | Crush                     | OSS (Charm)                   | full           | custom         | false        |
-| qwen         | Qwen Kodu                 | Alibaba                       | full           | guide          | true         |
-| cursor       | Cursor                    | Anysphere                     | none           | guide          | false        |
-| antigravity  | Antigravity               | Google                        | none           | mitm           | false        |
-| hermes       | Hermes                    | Nous Research                 | none           | guide          | false        |
-| kiro         | Kiro AI                   | Amazon                        | none           | mitm           | false        |
-| custom       | Özel CLI                  | —                             | full           | custom-builder | false        |
-
-`baseUrlSupport: "partial"` olan araçlar, gösterge paneli kartında "⚠ Temel URL kısmi" rozetini gösterir.
-
-## 2. CLI Ajanları Kataloğu (8 araç)
-
-`/dashboard/cli-agents` içinde görünen otonom ajanlar:
-
-| id           | isim             | satıcı                   | baseUrlDestek | acpSpawnable |
-| ------------ | ---------------- | ------------------------ | ------------- | ------------ |
-| hermes-agent | Hermes Ajanı     | Nous Research            | tam           | false        |
-| openclaw     | OpenClaw         | OSS (P. Steinberger)     | tam           | true         |
-| goose        | Goose            | Block / Linux Foundation | tam           | true         |
-| interpreter  | Open Interpreter | OSS                      | tam           | true         |
-| warp         | Warp AI          | Warp Inc.                | kısmi         | true         |
-| agent-deck   | Ajan Destesi     | asheshgoplani (OSS)      | tam           | false        |
-| omp          | Oh My Pi         | OSS                      | tam           | true         |
-| letta        | Letta CLI        | Letta                    | tam           | false        |
+Kontrol panelinin **uygulama uç noktası** (`POST /api/cli-tools/apply`) aynı korumayı uygular: bir kapsayıcıda, hedefi ana bilgisayardan bağlanmamış bir yazma işlemi, `containerEphemeralTarget: true` ile **`422`** yanıtı verir, güvenli hata metni ve — ana bilgisayar tarifi olan araçlar için (claude, codex, opencode, cline, kilo, continue) — bunun yerine ana bilgisayarda çalıştırılacak bir `hostSetupCommand` (örn. `omniroute setup-opencode`) sağlar; hiçbir şey yazılmaz. `dryRun: true` kapsayıcı modunda çalışmaya devam eder ve diske dokunmadan sansürlenmiş bir önizleme + hedef yolu döndürür. Önizleme içeriği, kopyalanacak veya içe aktarılacak kimlik bilgisi içeren bir yapılandırma değildir. Ana bilgisayarda orijinal araç/temel URL/API anahtarı/model girdileriyle uygulayın veya belirtilen ana bilgisayar tarafı kurulum komutunu kullanın. Önizleme başlığı ve istek sözleşmesi için [CLI yapılandırma güvenliği](../security/CLI-CONFIGURATION.md) bölümüne bakın. Bu davranış kasıtlıdır ve `tests/unit/api/cli-tools/apply-container-guard.test.ts` tarafından regresyonlara karşı korunmaktadır — bir 422 hatasını korumayı kaldırarak asla "düzeltmeyin".
 
 ---
 
-## 3. ACP Ajanları (/dashboard/acp-agents)
+## Doğruluk Kaynağı
 
-Bu sayfa (`/dashboard/agents`'dan yeniden adlandırılmıştır) OmniRoute'un stdio/ACP protokolü aracılığıyla **oluşturabileceği** arka uç yürütme motorlarını gösterir. Katalog, `src/lib/acp/registry.ts` içinde ayrı olarak korunmaktadır ve `CLI_TOOLS` ile **aynı değildir**.
+Birleşik katalog, `src/shared/constants/cliTools.ts` dosyasında `CLI_TOOLS: Record<string, CliCatalogEntry>` olarak yer alır.
+
+Her girdi şu alanlara sahiptir (`src/shared/schemas/cliCatalog.ts` içinde tanımlanmıştır):
+
+| Alan                                            | Tür                                                          | Açıklama                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `category`                                      | `"code" \| "agent"`                                          | Aracın hangi sayfada göründüğü                               |
+| `vendor`                                        | `string`                                                     | Aracın kaynağı ("Anthropic", "OSS (P. Gauthier)")            |
+| `acpSpawnable`                                  | `boolean`                                                    | ACP Agent olarak da kullanılabilir (rozet gösterilir)        |
+| `baseUrlSupport`                                | `"full" \| "partial" \| "none"`                              | Özel uç nokta destek düzeyi. `"none"` = MITM bekleme listesi |
+| `configType`                                    | `"env" \| "custom" \| "guide" \| "custom-builder" \| "mitm"` | Yapılandırma mekanizması                                     |
+| `id`, `name`, `color`, `description`, `docsUrl` | standart                                                     | Temel görüntüleme alanları                                   |
+
+`baseUrlSupport: "none"` içeren girdiler pano sayfalarında **gösterilmez** — plan 11 için MITM bekleme listesine kaydedilirler (bkz. `_tasks/features-v3.8.6/refactorpages/_orchestration/_plan11-mitm-backlog.md`).
+
+### Yetenek katmanları (kataloglanmış × algılanabilir × yapılandırılabilir × başlatılabilir)
+
+Kataloglanan her araç algılanabilir, yapılandırılabilir veya başlatılabilir değildir. Her katmanın
+tek bir bildirim kaynağı vardır ve bir sapma testi bunların uyumlu kalmasını sağlar:
+
+| Katman                 | Anlamı                                                                                      | Bildirildiği yer                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Kataloglanmış**      | Pano kataloğunda görünür (ad, sağlayıcı, belgeler, yapılandırma türü)                       | `src/shared/constants/cliTools.ts` (`CLI_TOOLS`)                          |
+| **Algılanabilir**      | İkili dosya/yapılandırma algılama, sistem durumu kontrolleri, yapılandırma yolları          | `src/shared/services/cliRuntime.ts` (`CLI_TOOLS` çalışma zamanı kataloğu) |
+| **Yapılandırılabilir** | `omniroute configure <cli>` tarafından desteklenir (kurulum tarifi mevcuttur)               | `bin/cli/cli-manifest.mjs` (`configure: true`)                            |
+| **Başlatılabilir**     | `omniroute run <target>` tarafından desteklenir (ortam/değişken enjeksiyonu tanımlanmıştır) | `bin/cli/cli-manifest.mjs` (`run: true`)                                  |
+
+`bin/cli/cli-manifest.mjs`, CLI komut
+yüzeyleri için kurallı çalıştırılabilir manifesttir: `run`, `configure` ve kabuk tamamlama oluşturucularının tümü
+hedef listelerini, takma ad çözümlemesini (örneğin `kilocode`/`kilo-code`/`kilo_cli` → `kilo`)
+ve `--model` bayrağı bağlantısını buradan türetir. Sapma koruması
+`tests/unit/cli/cli-manifest-drift.test.ts`; manifestin, çalışma zamanı
+kataloğunun, kullanıcı arayüzü kataloğunun ve her tüketici yüzeyinin senkronize kalmasını doğrular — yalnızca
+bir yüzeye eklenen bir hedef, sessizce sapmak yerine test paketinin başarısız olmasına neden olur.
 
 ---
 
-## 4. MITM Bekleme Listesi (dashboard'da gösterilmez)
+## 1. CLI Code Kataloğu (26 araç)
 
-Aşağıdaki CLIs yerel olarak özel bir temel URL'yi desteklememektedir ve CLI Kodu veya CLI Ajanları sayfalarında **listelenmemiştir**. Plan 11'de MITM müdahalesi için adaylardır:
+`/dashboard/cli-code` içinde görünen tüm araçlar. `baseUrlSupport: none` olanlar, özel bir temel URL yerine MITM veya manuel bir kılavuz üzerinden yapılandırılır:
 
-| CLI                 | Sebep                                              |
-| ------------------- | -------------------------------------------------- |
-| windsurf            | BYOK, seçili Claude modelleri + kurumsal URL/token |
-| amp                 | Kapalı ekosistem (Sourcegraph)                     |
-| amazon-q / kiro-cli | AWS SSO kimlik doğrulama, özel URL yok             |
-| cowork              | Anthropic Desktop, yapılandırılabilir uç nokta yok |
+| id           | ad                      | sağlayıcı             | baseUrlSupport | configType     | acpSpawnable |
+| ------------ | ----------------------- | --------------------- | -------------- | -------------- | ------------ |
+| claude       | Claude Code             | Anthropic             | full           | env            | true         |
+| codex        | OpenAI Codex CLI        | OpenAI                | full           | custom         | true         |
+| zcode        | ZCode (GLM Coding Plan) | Z.ai                  | none           | custom         | false        |
+| cline        | Cline                   | OSS (eski Claude Dev) | full           | custom         | true         |
+| kilo         | Kilo Code               | Kilo-Org              | full           | custom         | false        |
+| roo          | Roo Code                | Roo (OSS)             | full           | guide          | false        |
+| continue     | Continue                | continue.dev          | full           | guide          | false        |
+| aider        | Aider                   | OSS (P. Gauthier)     | full           | guide          | true         |
+| forge        | ForgeCode               | Antinomy HQ           | full           | custom         | true         |
+| jcode        | jcode                   | 1jehuang (OSS)        | full           | custom         | false        |
+| deepseek-tui | DeepSeek TUI            | Hunter Bown (OSS)     | full           | custom         | false        |
+| codewhale    | CodeWhale               | Hmbown (OSS)          | full           | custom         | false        |
+| opencode     | OpenCode                | Anomaly (eski SST)    | full           | guide          | true         |
+| droid        | Factory Droid           | Factory AI            | partial        | guide          | false        |
+| copilot      | GitHub Copilot CLI      | GitHub/MS             | full           | custom         | false        |
+| cursor-cli   | Cursor CLI              | Anysphere             | partial        | guide          | true         |
+| smelt        | Smelt                   | leonardcser (OSS)     | full           | custom         | false        |
+| pi           | Pi (pi-coding-agent)    | M. Zechner (OSS)      | full           | custom         | false        |
+| grok-build   | Grok Build              | xAI                   | full           | custom         | false        |
+| crush        | Crush                   | OSS (Charm)           | full           | custom         | false        |
+| qwen         | Qwen Code               | Alibaba               | full           | guide          | true         |
+| cursor       | Cursor                  | Anysphere             | none           | guide          | false        |
+| antigravity  | Antigravity             | Google                | none           | mitm           | false        |
+| hermes       | Hermes                  | Nous Research         | none           | guide          | false        |
+| kiro         | Kiro AI                 | Amazon                | none           | mitm           | false        |
+| custom       | Özel CLI                | —                     | full           | custom-builder | false        |
 
-Tam çapraz referans için `_tasks/features-v3.8.6/refactorpages/_orchestration/_plan11-mitm-backlog.md`'ye bakın.
+`baseUrlSupport: "partial"` olan araçların kontrol paneli kartında "⚠ Kısmi Temel URL" rozeti gösterilir.
+---
+
+## 2. CLI Aracıları Kataloğu (10 araç)
+
+`/dashboard/cli-agents` sayfasında görünen otonom aracılar:
+
+| id           | ad               | sağlayıcı                | baseUrlSupport | acpSpawnable |
+| ------------ | ---------------- | ------------------------ | -------------- | ------------ |
+| hermes-agent | Hermes Agent     | Nous Research            | tam            | false        |
+| openclaw     | OpenClaw         | OSS (P. Steinberger)     | tam            | true         |
+| goose        | Goose            | Block / Linux Foundation | tam            | true         |
+| interpreter  | Open Interpreter | OSS                      | tam            | true         |
+| warp         | Warp AI          | Warp Inc.                | kısmi          | true         |
+| agent-deck   | Agent Deck       | asheshgoplani (OSS)      | tam            | false        |
+| omp          | Oh My Pi         | OSS                      | tam            | true         |
+| letta        | Letta CLI        | Letta                    | tam            | false        |
+| prime-agent  | Prime Agent      | Prime Intellect (OSS)    | tam            | false        |
+| 5dive        | 5dive            | OSS (5dive-ai)           | tam            | false        |
 
 ---
 
-## 5. Batch Tespit API'si
+## 3. ACP Aracıları (/dashboard/acp-agents)
 
-Tüm araç tespiti tek bir uç nokta üzerinden toplanmaktadır:
+Bu sayfa (önceki adı `/dashboard/agents`), OmniRoute'un stdio/ACP protokolü aracılığıyla arka uç yürütme motorları olarak **başlatabildiği** CLI'ları gösterir. Katalog, `src/lib/acp/registry.ts` içinde ayrı olarak tutulur ve `CLI_TOOLS` ile **aynı değildir**.
+
+---
+
+## 4. MITM İş Listesi (panoda gösterilmez)
+
+Aşağıdaki CLI'lar özel temel URL'yi yerel olarak desteklemez ve CLI Code veya CLI Agents sayfalarında **listelenmez**. Bunlar, plan 11'de MITM müdahalesi için adaydır:
+
+| CLI                 | Neden                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| windsurf            | BYOK, belirli Claude modelleri + kurumsal URL/token ile sınırlıdır |
+| amp                 | Kapalı ekosistem (Sourcegraph)                                     |
+| amazon-q / kiro-cli | AWS SSO kimlik doğrulaması, özel URL yoktur                        |
+| cowork              | Anthropic Desktop, yapılandırılabilir uç nokta yoktur              |
+
+Tam çapraz referans için `_tasks/features-v3.8.6/refactorpages/_orchestration/_plan11-mitm-backlog.md` dosyasına bakın.
+
+---
+
+## 5. Toplu Algılama API'si
+
+Tüm araç algılama işlemleri tek bir uç nokta aracılığıyla birleştirilir:
 
 **`GET /api/cli-tools/all-statuses`**
 
-- Yetki: `requireCliToolsAuth(request)` (diğer `/api/cli-tools/` yollarıyla aynı)
-- Döner: `Record<toolId, ToolBatchStatus>` (tip: `src/shared/types/cliBatchStatus.ts`)
-- Strateji: Tüm araçlar üzerinde `Promise.all`, her araç için 5s zaman aşımı
-- Önbellek: yapılandırma dosyası `mtime` ile indekslenmiş bellek içi LRU. mtime değiştiğinde önbellek geçersiz kılınır. Sunucu yeniden başlatıldığında sıfırlanır.
+- Kimlik doğrulama: `requireCliToolsAuth(request)` (diğer `/api/cli-tools/` rotalarıyla aynı)
+- Döndürür: `Record<toolId, ToolBatchStatus>` (tür: `src/shared/types/cliBatchStatus.ts`)
+- Strateji: Tüm araçlar üzerinde `Promise.all`, araç başına 5 saniye zaman aşımı
+- Önbellek: Yapılandırma dosyasının `mtime` değerine göre indekslenen bellek içi LRU. `mtime` değiştiğinde önbellek geçersiz kılınır. Sunucu yeniden başlatıldığında sıfırlanır.
 
-Araç başına yanıt şekli:
+Araç başına yanıt yapısı:
 
 ```ts
 interface ToolBatchStatus {
@@ -217,73 +214,77 @@ interface ToolBatchStatus {
 }
 ```
 
+---
+
 ## 6. Yeni Araçlar için Ayar İşleyicileri
 
-`configType: "custom"` olan yeni araçların özel ayar API yolları vardır:
+`configType: "custom"` değerine sahip yeni araçların özel ayarlar API rotaları vardır:
 
-| Yol                                         | Araç                                                                       |
-| ------------------------------------------- | -------------------------------------------------------------------------- |
-| `POST /api/cli-tools/forge-settings`        | ForgeCode (.forge.toml)                                                    |
-| `POST /api/cli-tools/jcode-settings`        | jcode (--base-url bayrağı)                                                 |
-| `POST /api/cli-tools/deepseek-tui-settings` | DeepSeek TUI (OPENAI_BASE_URL, eski)                                       |
-| `POST /api/cli-tools/codewhale-settings`    | CodeWhale (OPENAI_BASE_URL, birincil + eski `~/.deepseek` senkronizasyonu) |
-| `POST /api/cli-tools/smelt-settings`        | Smelt                                                                      |
-| `POST /api/cli-tools/pi-settings`           | Pi kodlama aracı                                                           |
-| `POST /api/cli-tools/grok-build-settings`   | Grok Build (~/.grok/config.toml, `[model.omniroute]`)                      |
-| `POST /api/cli-tools/qwen-settings`         | Qwen Code (`~/.qwen/settings.json` + özel `.env` anahtarı)                 |
+| Rota                                        | Araç                                                                  |
+| ------------------------------------------- | --------------------------------------------------------------------- |
+| `POST /api/cli-tools/forge-settings`        | ForgeCode (.forge.toml)                                               |
+| `POST /api/cli-tools/jcode-settings`        | jcode (--base-url bayrağı)                                            |
+| `POST /api/cli-tools/deepseek-tui-settings` | DeepSeek TUI (OPENAI_BASE_URL, eski)                                  |
+| `POST /api/cli-tools/codewhale-settings`    | CodeWhale (OPENAI_BASE_URL, birincil + eski `~/.deepseek` eşitlemesi) |
+| `POST /api/cli-tools/smelt-settings`        | Smelt                                                                 |
+| `POST /api/cli-tools/pi-settings`           | Pi kodlama ajanı                                                      |
+| `POST /api/cli-tools/grok-build-settings`   | Grok Build (~/.grok/config.toml, `[model.omniroute]`)                 |
+| `POST /api/cli-tools/qwen-settings`         | Qwen Code (`~/.qwen/settings.json` + özel `.env` anahtarı)            |
 
-Tüm yollar hata yanıtları için `sanitizeErrorMessage()` kullanır (Sert Kural #12).
+Tüm rotalar, hata yanıtları için `sanitizeErrorMessage()` kullanır (Kesin Kural #12).
 
 ---
 
-## 7. Gösterge Paneli Sayfaları Mimarisi
+## 7. Kontrol Paneli Sayfalarının Mimarisi
 
-### CLI Kodu (`/dashboard/cli-code`)
+### CLI Kodları (`/dashboard/cli-code`)
 
 - `src/app/(dashboard)/dashboard/cli-code/page.tsx` — sunucu bileşeni
 - `src/app/(dashboard)/dashboard/cli-code/CliCodePageClient.tsx` — istemci ızgarası
-- `src/app/(dashboard)/dashboard/cli-code/[id]/page.tsx` — araç detay sayfası
-- `src/app/(dashboard)/dashboard/cli-code/components/` — 12 özel araç kartı + `ToolDetailClient.tsx`
+- `src/app/(dashboard)/dashboard/cli-code/[id]/page.tsx` — araç ayrıntı sayfası
+- `src/app/(dashboard)/dashboard/cli-code/components/` — 12 özelleştirilmiş araç kartı + `ToolDetailClient.tsx`
 
 ### CLI Ajanları (`/dashboard/cli-agents`)
 
 - `src/app/(dashboard)/dashboard/cli-agents/page.tsx` — sunucu bileşeni
 - `src/app/(dashboard)/dashboard/cli-agents/CliAgentsPageClient.tsx` — istemci ızgarası
-- `src/app/(dashboard)/dashboard/cli-agents/[id]/page.tsx` — `ToolDetailClient`'i yeniden kullanır
+- `src/app/(dashboard)/dashboard/cli-agents/[id]/page.tsx` — `ToolDetailClient` bileşenini yeniden kullanır
 
 ### ACP Ajanları (`/dashboard/acp-agents`)
 
-- `src/app/(dashboard)/dashboard/acp-agents/page.tsx` — sunucu bileşeni ( `agents/`'dan taşındı)
+- `src/app/(dashboard)/dashboard/acp-agents/page.tsx` — sunucu bileşeni (`agents/` konumundan taşındı)
 
-### Paylaşılan UI Bileşenleri (`src/shared/components/cli/`)
+### Paylaşılan Kullanıcı Arayüzü Bileşenleri (`src/shared/components/cli/`)
 
-| Dosya                   | Amaç                                                  |
-| ----------------------- | ----------------------------------------------------- |
-| `CliToolCard.tsx`       | Akıllı durum kartı (tespit + yapılandırma + uç nokta) |
-| `CliConceptCard.tsx`    | Sayfa başına kavram açıklama kartı                    |
-| `CliComparisonCard.tsx` | CLI türleri arasında üç sütunlu karşılaştırma         |
-| `BaseUrlSelect.tsx`     | Uç nokta açılır menüsü (Yerel/Bulut/Özel)             |
-| `ApiKeySelect.tsx`      | API anahtarı seçici                                   |
-| `ManualConfigModal.tsx` | Kopyalanabilir yapılandırma kesiti modali             |
+| Dosya                   | Amaç                                                    |
+| ----------------------- | ------------------------------------------------------- |
+| `CliToolCard.tsx`       | Akıllı durum kartı (algılama + yapılandırma + uç nokta) |
+| `CliConceptCard.tsx`    | Sayfa bazında kavram açıklama kartı                     |
+| `CliComparisonCard.tsx` | CLI türleri arasında üç sütunlu karşılaştırma           |
+| `BaseUrlSelect.tsx`     | Uç nokta açılır menüsü (Yerel/Bulut/Özel)               |
+| `ApiKeySelect.tsx`      | API anahtarı seçici                                     |
+| `ManualConfigModal.tsx` | Kopyalanabilir yapılandırma parçacığı modalı            |
 
 ### Paylaşılan Hook (`src/shared/hooks/cli/`)
 
-| Dosya                     | Amaç                                                                    |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `useToolBatchStatuses.ts` | `/api/cli-tools/all-statuses`'i alır, yükleme/yenileme durumunu yönetir |
+| Dosya                     | Amaç                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| `useToolBatchStatuses.ts` | `/api/cli-tools/all-statuses` verilerini getirir, yükleme/yenileme durumunu yönetir |
+
+---
 
 ## 8. i18n
 
 Plan 14 F9'da eklenen yeni ad alanları:
 
-| Ad Alanı    | Amaç                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------- |
-| `cliCommon` | Paylaşılan metinler (kart etiketleri, kavram/kıyas metinleri, detay sayfası etiketleri) |
-| `cliCode`   | CLI Kodu sayfası metinleri                                                              |
-| `cliAgents` | CLI Ajanları sayfası metinleri                                                          |
-| `acpAgents` | ACP Ajanları sayfası metinleri                                                          |
+| Ad Alanı    | Amaç                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| `cliCommon` | Paylaşılan dizeler (kart etiketleri, kavram/karşılaştırma metinleri, ayrıntı sayfası etiketleri) |
+| `cliCode`   | CLI Code sayfası dizeleri                                                                        |
+| `cliAgents` | CLI Agents sayfası dizeleri                                                                      |
+| `acpAgents` | ACP Agents sayfası dizeleri                                                                      |
 
-Tam PT-BR ve EN çevirileri sağlanmıştır. 39 diğer yerel ayar, `src/i18n/request.ts` içindeki ad alanı düzeyinde birleştirme ile otomatik olarak EN'ye geri döner.
+Eksiksiz PT-BR ve EN çevirileri sağlanmıştır. Diğer 39 yerel ayar, `src/i18n/request.ts` içindeki ad alanı düzeyindeki birleştirme aracılığıyla otomatik olarak EN diline geri döner.
 
 ---
 
@@ -291,17 +292,17 @@ Tam PT-BR ve EN çevirileri sağlanmıştır. 39 diğer yerel ayar, `src/i18n/re
 
 ### Adım 1 — OmniRoute API Anahtarı Alın
 
-1. `/dashboard/api-manager`'ı açın → **API Anahtarı Oluştur**
-2. Bir isim verin (örn. `cli-tools`) ve tüm izinleri seçin
+1. `/dashboard/api-manager` sayfasını açın → **API Anahtarı Oluştur**
+2. Anahtara bir ad verin (ör. `cli-tools`) ve tüm izinleri seçin
 3. Anahtarı kopyalayın — aşağıdaki her CLI için buna ihtiyacınız olacak
 
-> Anahtarınız şöyle görünecek: `sk-xxxxxxxxxxxxxxxx-xxxxxxxxx`
+> Anahtarınız şuna benzer: `sk-xxxxxxxxxxxxxxxx-xxxxxxxxx`
 
 ---
 
 ### Adım 2 — CLI Araçlarını Yükleyin
 
-Tüm npm tabanlı araçlar Node.js 22.22.2+ veya 24.x gerektirir:
+npm tabanlı tüm araçlar Node.js 22.22.2+ veya 24.x gerektirir:
 
 ```bash
 # Claude Code (Anthropic)
@@ -322,7 +323,7 @@ npm install -g kilocode
 # Qwen Code
 npm install -g @qwen-code/qwen-code
 
-# Google Gemini CLI (launchable via `omniroute run gemini` → /v1beta surface)
+# Google Gemini CLI (`omniroute run gemini` aracılığıyla başlatılabilir → /v1beta yüzeyi)
 npm install -g @google/gemini-cli
 
 # Aider
@@ -331,26 +332,26 @@ pip install aider-chat
 # Smelt
 cargo install smelt  # Rust tabanlı
 
-# Pi coding agent
-# yükleme için https://github.com/zechnerj/pi-coding-agent adresine bakın
+# Pi kodlama aracısı
+# kurulum için https://github.com/zechnerj/pi-coding-agent adresine bakın
 
 # jcode
-# yükleme için https://github.com/1jehuang/jcode adresine bakın
+# kurulum için https://github.com/1jehuang/jcode adresine bakın
 ```
 
 ---
 
-### Adım 3 — Dashboard Üzerinden Yapılandırın
+### Adım 3 — Kontrol Paneli Üzerinden Yapılandırın
 
 1. `http://localhost:20128/dashboard/cli-code` adresine gidin
-2. Araçlar ızgarasında aracınızı bulun
-3. Aracı detay sayfasını açmak için karta tıklayın
+2. Izgarada aracınızı bulun
+3. Araç ayrıntıları sayfasını açmak için karta tıklayın
 4. API anahtarınızı ve temel URL'yi seçin
-5. **Yapılandırmayı Uygula**'ya tıklayın veya manuel yapılandırma parçasını kopyalayın
+5. **Yapılandırmayı Uygula** seçeneğine tıklayın veya manuel yapılandırma kod parçacığını kopyalayın
 
 ---
 
-### Adım 4 — Küresel Ortam Değişkenlerini Ayarlayın
+### Adım 4 — Genel Ortam Değişkenlerini Ayarlayın
 
 ```bash
 # OmniRoute Evrensel Uç Noktası
@@ -358,13 +359,13 @@ export OPENAI_BASE_URL="http://localhost:20128/v1"
 export OPENAI_API_KEY="sk-your-omniroute-key"
 export ANTHROPIC_BASE_URL="http://localhost:20128"
 export ANTHROPIC_AUTH_TOKEN="sk-your-omniroute-key"
-# Gemini CLI, KÖK'te GOOGLE_GEMINI_BASE_URL okur (SDK'sı /v1beta/... ekler)
+# Gemini CLI, GOOGLE_GEMINI_BASE_URL değerini KÖK düzeyinde okur (SDK'sı /v1beta/... yolunu kendisi ekler)
 export GOOGLE_GEMINI_BASE_URL="http://localhost:20128"
 export GEMINI_API_KEY="sk-your-omniroute-key"
 ```
 
-> **Uzak bir sunucu** için `localhost:20128`'i sunucu IP'si veya alan adı ile değiştirin,
-> örn. `http://<your-server-ip>:20128`.
+> **Uzak sunucu** için `localhost:20128` değerini sunucu IP'si veya etki alanıyla değiştirin,
+> ör. `http://<your-server-ip>:20128`.
 
 ---
 
@@ -373,7 +374,7 @@ export GEMINI_API_KEY="sk-your-omniroute-key"
 #### Claude Code
 
 ```bash
-# ~/.claude/settings.json oluşturun:
+# ~/.claude/settings.json dosyasını oluşturun:
 mkdir -p ~/.claude && cat > ~/.claude/settings.json << EOF
 {
   "env": {
@@ -384,17 +385,18 @@ mkdir -p ~/.claude && cat > ~/.claude/settings.json << EOF
 EOF
 ```
 
-Claude Code için birleşik Anthropic geçiş kökünü kullanın. Burada `/v1` eklemeyin.
+Claude Code için birleştirilmiş Anthropic ağ geçidi kökünü kullanın. Buraya `/v1` eklemeyin.
 
-**Test:** `claude "merhaba de"`
+**Test:** `claude "say hello"`
 
 ---
 
 #### OpenAI Codex
 
 Modern Codex (v0.137+) yalnızca `~/.codex/config.toml` dosyasını okur — eski
-`config.yaml`, miras npm CLI'ye aittir ve sessizce yok sayılır. API
-anahtarı, dosya içinde asla değil, `OMNIROUTE_API_KEY` ortam değişkeninde (`env_key`) kalır:
+`config.yaml`, eski npm CLI'ına aittir ve sessizce yok sayılır. API
+anahtarı dosyanın içinde değil, her zaman `OMNIROUTE_API_KEY` ortam değişkeninde (`env_key`)
+kalır:
 
 ```bash
 mkdir -p ~/.codex && cat > ~/.codex/config.toml << EOF
@@ -409,9 +411,9 @@ EOF
 export OMNIROUTE_API_KEY="sk-your-omniroute-key"
 ```
 
-Tam referans (profiller, `wire_api`, bağlam pencereleri): [CODEX-CLI-CONFIGURATION.md](../guides/CODEX-CLI-CONFIGURATION.md).
+Tam başvuru (profiller, `wire_api`, bağlam pencereleri): [CODEX-CLI-CONFIGURATION.md](../guides/CODEX-CLI-CONFIGURATION.md).
 
-**Test:** `codex "2+2 nedir?"`
+**Test:** `codex "what is 2+2?"`
 
 ---
 
@@ -442,7 +444,9 @@ EOF
 
 **Test:** `opencode`
 
-> Düşünme varyantlarını göndermek için `opencode run "prompt'iniz" --model omniroute/claude-sonnet-4-5-thinking --variant high` kullanın.
+> Düşünme varyantlarını göndermek için
+> `opencode run "your prompt" --model omniroute/claude-sonnet-4-5-thinking --variant high`
+> komutunu kullanın.
 
 ---
 
@@ -461,9 +465,9 @@ EOF
 ```
 
 **VS Code modu:**
-Cline uzantı ayarları → API Sağlayıcı: `OpenAI Uyumluluğu` → Temel URL: `http://localhost:20128/v1`
+Cline uzantısı ayarları → API Sağlayıcısı: `OpenAI Compatible` → Temel URL: `http://localhost:20128/v1`
 
-Ya da OmniRoute dashboard'unu kullanarak → **CLI Araçları → Cline → Yapılandırmayı Uygula**.
+Alternatif olarak OmniRoute kontrol panelini kullanın → **CLI Araçları → Cline → Yapılandırmayı Uygula**.
 
 ---
 
@@ -484,7 +488,7 @@ kilocode --api-base http://localhost:20128/v1 --api-key sk-your-omniroute-key
 }
 ```
 
-Ya da OmniRoute dashboard'unu kullanarak → **CLI Araçları → KiloCode → Yapılandırmayı Uygula**.
+Alternatif olarak OmniRoute kontrol panelini kullanın → **CLI Araçları → KiloCode → Yapılandırmayı Uygula**.
 
 ---
 
@@ -502,20 +506,20 @@ models:
     default: true
 ```
 
-Düzenledikten sonra VS Code'u yeniden başlatın.
+Düzenleme işleminden sonra VS Code'u yeniden başlatın.
 
 ---
 
 #### VS Code Insiders (`chatLanguageModels.json`)
 
-VS Code Insiders, özel uç nokta modelleri için yapılandırıldığında ve OmniRoute'un özel bir başlık alanı olmadan çalışmasını istediğinizde bunu kullanın.
+VS Code Insiders özel uç nokta modelleri için yapılandırıldığında ve OmniRoute'un özel bir üst bilgi alanı olmadan çalışmasını istediğinizde bunu kullanın.
 
-**Tavsiye edilen konum:**
+**Önerilen konum:**
 
 - Linux: `~/.config/Code - Insiders/User/chatLanguageModels.json`
 - Windows: `%APPDATA%/Code - Insiders/User/chatLanguageModels.json`
 
-**Tokenize edilmiş OmniRoute takma adını kullanarak örnek:**
+**Tokenleştirilmiş OmniRoute takma adını kullanan örnek:**
 
 ```json
 [
@@ -539,96 +543,98 @@ VS Code Insiders, özel uç nokta modelleri için yapılandırıldığında ve O
 
 **Notlar:**
 
-- `sk-your-omniroute-key`'i OmniRoute'da oluşturulan bir API anahtarı ile değiştirin.
-- `url` alanı `/api/v1/vscode/{token}/chat/completions`'a işaret etmelidir.
-- `modelsUrl` alanı `/api/v1/vscode/{token}/models`'a işaret etmelidir.
-- İstemci özel başlıkları desteklediğinde normal `/v1` + Bearer başlık akışını tercih edin.
-- URL'ye gömülü tokenler, uyumluluk geri dönüşü olarak kullanılmaktadır ve editör günlüklerinde veya proxy geçmişinde görünebilir.
+- `sk-your-omniroute-key` değerini OmniRoute'ta oluşturulan bir API anahtarıyla değiştirin.
+- `url` alanı `/api/v1/vscode/{token}/chat/completions` yolunu göstermelidir.
+- `modelsUrl` alanı `/api/v1/vscode/{token}/models` yolunu göstermelidir.
+- İstemci özel başlıkları desteklediğinde normal `/v1` + Bearer başlığı akışını tercih edin.
+- URL'ye gömülü token'lar uyumluluk için kullanılan bir geri dönüş seçeneğidir ve düzenleyici günlüklerinde veya proxy geçmişinde görünebilir.
 
 ---
 
 #### Kiro CLI (Amazon)
 
 ```bash
-# AWS/Kiro hesabınıza giriş yapın:
+# AWS/Kiro hesabınızda oturum açın:
 kiro-cli login
 
-# CLI kendi kimlik doğrulamasını kullanır — Kiro CLI için arka uç olarak OmniRoute gerekli değildir.
-# Diğer araçlar için OmniRoute ile birlikte kiro-cli kullanın.
+# CLI kendi kimlik doğrulamasını kullanır — Kiro CLI'ın kendisi için arka uç olarak OmniRoute'a gerek yoktur.
+# Diğer araçlar için kiro-cli'ı OmniRoute ile birlikte kullanın.
 kiro-cli status
 ```
 
-**Kiro IDE** masaüstü uygulaması için, OmniRoute tarafından sağlanan MITM uç noktasını kullanın
-`/dashboard/cli-tools → Kiro` altında.
+**Kiro IDE** masaüstü uygulaması için OmniRoute tarafından
+`/dashboard/cli-tools → Kiro` altında sunulan MITM uç noktasını kullanın.
+
+---
 
 ## 10. Dahili OmniRoute CLI
 
-`omniroute` ikili dosyası, sunucu yaşam döngüsü, kurulum, tanılama ve sağlayıcı yönetimi için komutlar sağlar. Giriş noktası: `bin/omniroute.mjs`.
+`omniroute` ikili dosyası; sunucu yaşam döngüsü, kurulum, tanılama ve sağlayıcı yönetimi için komutlar sağlar. Giriş noktası: `bin/omniroute.mjs`.
 
 ```bash
-omniroute                              # Sunucuyu başlat (varsayılan port 20128)
+omniroute                              # Sunucuyu başlatır (varsayılan port 20128)
 omniroute setup                        # Etkileşimli kurulum sihirbazı
-omniroute doctor                       # Yapılandırmayı, DB'yi, portları, çalışma zamanını kontrol et
+omniroute doctor                       # Yapılandırmayı, DB'yi, portları ve çalışma zamanını kontrol eder
 omniroute providers list               # Yapılandırılmış sağlayıcı bağlantıları
-omniroute providers test-all           # Her aktif bağlantıyı test et
-omniroute reset-password               # Yönetici şifresini sıfırla
-omniroute logs                         # İstek günlüklerini akıt
-omniroute health                       # Ayrıntılı sağlık durumu (kesiciler, önbellek, bellek)
-omniroute --version                    # Sürümü yazdır
-omniroute --help                       # Tüm komutları göster
+omniroute providers test-all           # Her etkin bağlantıyı test eder
+omniroute reset-password               # Yönetici parolasını sıfırlar
+omniroute logs                         # İstek günlüklerini akış halinde gösterir
+omniroute health                       # Ayrıntılı sistem durumu (kesiciler, önbellek, bellek)
+omniroute --version                    # Sürümü yazdırır
+omniroute --help                       # Tüm komutları gösterir
 ```
 
 ### Kurulum ve Başlatma
 
 ```bash
 omniroute setup                        # Etkileşimli kurulum sihirbazı
-omniroute setup --non-interactive      # CI/otomasyon modu (çevre değişkenlerini + bayrakları okur)
-omniroute setup --password '<value>'   # Yönetici şifresini doğrudan ayarla
+omniroute setup --non-interactive      # CI/otomasyon modu (ortam değişkenlerini + bayrakları okur)
+omniroute setup --password '<value>'   # Yönetici parolasını doğrudan ayarlar
 omniroute setup --add-provider \
   --provider openai \
   --api-key '<value>' \
-  --test-provider                      # Bir sağlayıcıyı ekle ve test et
+  --test-provider                      # Tek seferde bir sağlayıcı ekler ve test eder
 ```
 
-Etkileşimli olmayan kurulum için tanınan çevre değişkenleri:
+Etkileşimsiz kurulum için tanınan ortam değişkenleri:
 
-| Var                 | Amaç                                                                              |
-| ------------------- | --------------------------------------------------------------------------------- |
-| `OMNIROUTE_API_KEY` | Sağlayıcı API anahtarı (Commander `.env()` aracılığıyla `--api-key` ile bağlanır) |
-| `DATA_DIR`          | OmniRoute veri dizinini geçersiz kıl                                              |
+| Değişken            | Amaç                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `OMNIROUTE_API_KEY` | Sağlayıcı API anahtarı (Commander `.env()` aracılığıyla `--api-key` seçeneğine bağlanır) |
+| `DATA_DIR`          | OmniRoute veri dizinini geçersiz kılar                                                   |
 
-Diğer tüm etkileşimli olmayan girdiler bayraklar olarak geçilir, çevre değişkenleri olarak değil:
+Diğer tüm etkileşimsiz girdiler ortam değişkenleri olarak değil, bayraklar olarak geçirilir:
 `--password`, `--provider`, `--provider-name`, `--provider-base-url`, `--default-model`
-(bkz. yukarıdaki `omniroute setup` seçenekleri).
+(yukarıdaki `omniroute setup` seçeneklerine bakın).
 
 ### Tanılama
 
 ```bash
-omniroute doctor                       # Yapılandırmayı, DB'yi, portları, çalışma zamanını, belleği, canlılığı kontrol et
-omniroute doctor --json                # Makine okunabilir JSON
-omniroute doctor --no-liveness         # HTTP sağlık sorgusunu atla
-omniroute doctor --host 0.0.0.0        # Canlılık ana bilgisayarını geçersiz kıl
-omniroute doctor --liveness-url <url>  # Tam sağlık uç noktası URL'sini geçersiz kıl
+omniroute doctor                       # Yapılandırmayı, DB'yi, portları, çalışma zamanını, belleği ve çalışırlığı kontrol eder
+omniroute doctor --json                # Makine tarafından okunabilir JSON
+omniroute doctor --no-liveness         # HTTP sistem durumu yoklamasını atlar
+omniroute doctor --host 0.0.0.0        # Çalışırlık ana makinesini geçersiz kılar
+omniroute doctor --liveness-url <url>  # Tam sistem durumu uç noktası URL'sini geçersiz kılar
 ```
 
-Doktor bu kontrolleri yapar: `Yapılandırma`, `Veritabanı`, `Depolama/şifreleme`,
-`Port kullanılabilirliği`, `Node çalışma zamanı`, `Yerel ikili` (better-sqlite3),
-`Bellek` ve `Sunucu canlılığı`. Herhangi bir kontrol `başarısız` olursa sıfırdan farklı bir çıkış yapar.
+Doctor şu kontrolleri çalıştırır: `Config`, `Database`, `Storage/encryption`,
+`Port availability`, `Node runtime`, `Native binary` (better-sqlite3),
+`Memory` ve `Server liveness`. Herhangi bir kontrol `fail` olursa sıfırdan farklı bir kodla çıkar.
 
 ### Sağlayıcı Yönetimi
 
 ```bash
 omniroute providers available                       # OmniRoute sağlayıcı kataloğu
-omniroute providers available --search openai       # Kataloğu id/ad/alias/kategoriye göre filtrele
-omniroute providers available --category api-key    # Kategoriye göre filtrele (api-key, oauth, ücretsiz, ...)
-omniroute providers available --json                # Makine okunabilir JSON
+omniroute providers available --search openai       # Kataloğu kimliğe/ada/takma ada/kategoriye göre filtreler
+omniroute providers available --category api-key    # Kategoriye göre filtreler (api-key, oauth, free, ...)
+omniroute providers available --json                # Makine tarafından okunabilir JSON
 
 omniroute providers list                            # Yapılandırılmış sağlayıcı bağlantıları
 omniroute providers list --json
 
-omniroute providers test <id|name>                  # Bir yapılandırılmış bağlantıyı test et
-omniroute providers test-all                        # Her aktif bağlantıyı test et
-omniroute providers validate                        # Yerel yalnızca yapısal doğrulama
+omniroute providers test <id|name>                  # Yapılandırılmış bir bağlantıyı test eder
+omniroute providers test-all                        # Her etkin bağlantıyı test eder
+omniroute providers validate                        # Yalnızca yerel yapısal doğrulama
 omniroute providers add <provider> --credential-env PROVIDER_KEY
 omniroute providers import ./providers.json --dry-run --json
 omniroute providers auth <provider>                 # Mevcut OAuth akışı
@@ -636,94 +642,99 @@ omniroute providers edit <id|name> --default-model <model>
 omniroute providers remove <id|name> --yes
 ```
 
-`providers add/import/auth/edit/remove` API-first'tır ve bu nedenle
-aktif yerel veya uzaktan bağlama karşı çalışır. Kimlik bilgisi girişi
-`--credential-stdin` veya `--credential-env` kullanmalıdır; `--dry-run --json` yalnızca
-gizlenmiş varlık/şekil raporları. `providers available` OmniRoute kataloğunu okur;
+`providers add/import/auth/edit/remove` öncelikli olarak API'yi kullanır ve bu nedenle
+etkin yerel veya uzak bağlam üzerinde çalışır. Kimlik bilgisi girdisi için
+`--credential-stdin` veya `--credential-env` kullanılmalıdır; `--dry-run --json` yalnızca
+gizlenmiş varlık/yapı bilgilerini bildirir. `providers available`, OmniRoute kataloğunu okur;
 `providers list/test/test-all/validate` yerel SQLite davranışlarını korur ve
 sunucunun çalışmasını gerektirmez.
 
 ### Kurtarma ve Sıfırlama
 
 ```bash
-omniroute reset-password                # Yönetici şifresini sıfırla (ayrıca: omniroute-reset-password)
-omniroute reset-encrypted-columns       # Şifreli kimlik bilgisi sıfırlama için uyarı göster + kuru çalışma
-omniroute reset-encrypted-columns --force  # SQLite'daki şifreli kimlik bilgilerini gerçekten sıfırla
+omniroute reset-password                # Yönetici parolasını sıfırlar (ayrıca: omniroute-reset-password)
+omniroute reset-encrypted-columns       # Şifrelenmiş kimlik bilgilerini sıfırlamak için uyarı + deneme çalıştırması gösterir
+omniroute reset-encrypted-columns --force  # SQLite'taki şifrelenmiş kimlik bilgilerini gerçekten null yapar
 ```
 
-### Kimlik Bilgisi Dışa Aktarma (⚠ dikkatli kullanın)
+### Kimlik Bilgilerini Dışa Aktarma (⚠ dikkatli kullanın)
 
 ```bash
-omniroute auth export                                 # Uyarı göster + onay kapısı — DB erişimi yok
-omniroute auth export --force                          # Tüm bağlantıların ŞİFRESİZ kimlik bilgilerini stdout'a JSON olarak dışa aktar
-omniroute auth export --force --id <id>                 # Sadece eşleşen bağlantıyı dışa aktar
-omniroute auth export --force --format env               # OMNIROUTE_<PROVIDER>_<FIELD>=<value> satırlarını yayınla
-omniroute auth export --force --out creds.json           # Bir dosyaya yaz (0600 izinleri ile oluşturulur)
+omniroute auth export                                 # Uyarı + onay geçidi gösterir — DB erişimi yoktur
+omniroute auth export --force                          # TÜM bağlantıların ŞİFRESİ ÇÖZÜLMÜŞ kimlik bilgilerini JSON olarak stdout'a aktarır
+omniroute auth export --force --id <id>                 # Yalnızca eşleşen bağlantıyı dışa aktarır
+omniroute auth export --force --format env               # OMNIROUTE_<PROVIDER>_<FIELD>=<value> satırları üretir
+omniroute auth export --force --out creds.json           # Bir dosyaya yazar (0600 izinleriyle oluşturulur)
 ```
 
-`auth export` **yerel yalnızca** (doğrudan SQLite okuma, HTTP rotası yok) ve kasıtlı olarak **düz metin** `apiKey`/`accessToken`/`refreshToken`/`idToken` değerlerini yazdırır/yazar — bu bir özellik, hata değil. Veritabanından hiçbir şey okunmaz ve hiçbir şey şifrelenmez, `--force` olmadan. Herhangi bir düz metin yayımlanmadan önce her zaman bir stderr uyarı bandı yazdırılır. `STORAGE_ENCRYPTION_KEY` ayarlanmış olmalıdır. Şifrelemeyi başaramayan bir alan (eski anahtar, bozuk şifreli metin) `export` işlemini durdurmak veya temel hatayı sızdırmak yerine `"<field>DecryptFailed: true"` olarak rapor edilir.
+`auth export` **yalnızca yerel** olarak çalışır (doğrudan SQLite okuması, HTTP rotası yoktur) ve kasıtlı olarak
+**düz metin** `apiKey`/`accessToken`/`refreshToken`/`idToken` değerlerini yazdırır/yazar — bu bir
+hata değil, özelliktir. `--force` olmadan veritabanından hiçbir şey okunmaz ve hiçbir şeyin şifresi çözülmez. Herhangi bir düz metin yayımlanmadan önce stderr'e
+her zaman bir uyarı başlığı yazdırılır. `STORAGE_ENCRYPTION_KEY` değişkeninin
+ayarlanmış olması gerekir. Şifresi çözülemeyen bir alan (eski anahtar, bozuk şifreli metin), dışa aktarma işleminin tamamını iptal etmek veya temel hatayı sızdırmak yerine
+`<field>DecryptFailed: true` olarak bildirilir.
 
 ### Diğer alt komutlar
 
-Bunlar, aksi belirtilmedikçe çalışan bir OmniRoute sunucusu varsayar:
+Aksi belirtilmedikçe bunlar çalışan bir OmniRoute sunucusu gerektirir:
 
 ```bash
-omniroute status                       # Kapsamlı çalışma durumu
-omniroute logs                         # İstek günlüklerini akıt (--json, --search, --follow)
-omniroute config show                  # Mevcut yapılandırmayı görüntüle
+omniroute status                       # Kapsamlı çalışma zamanı durumu
+omniroute logs                         # İstek günlüklerini akış halinde göster (--json, --search, --follow)
+omniroute config list                  # Yapılandırılmış CLI araçlarını göster
 
-omniroute provider list                # Mevcut sağlayıcıları listele (providers list'in takma adı)
-omniroute provider add                 # OmniRoute'u bir araçta sağlayıcı olarak kaydet
+omniroute provider list                # Kullanılabilir sağlayıcıları listele (providers list diğer adı)
+omniroute provider add                 # OmniRoute'u bir araca sağlayıcı olarak kaydet
 omniroute keys add | list | remove     # API anahtarlarını yönet
 omniroute models [provider]            # Modelleri listele (--json, --search)
 omniroute combo list | switch | create | delete
 
-omniroute backup                       # Yapılandırma + DB anlık görüntüsü
+omniroute backup                       # Yapılandırmanın ve veritabanının anlık görüntüsünü al
 omniroute restore                      # Önceki bir anlık görüntüden geri yükle
 
-omniroute health                       # Ayrıntılı sağlık durumu (kesiciler, önbellek, bellek)
+omniroute health                       # Ayrıntılı sistem durumu (devre kesiciler, önbellek, bellek)
 omniroute quota                        # Sağlayıcı kota kullanımı
 omniroute cache                        # Önbellek durumu
-omniroute cache clear                  # Anlamsal + imza önbelleklerini temizle
+omniroute cache clear                  # Anlamsal ve imza önbelleklerini temizle
 
-omniroute mcp status | restart         # MCP sunucu durumu / yeniden başlat
-omniroute a2a status | card            # A2A sunucu durumu / ajan kartı
+omniroute mcp status | restart         # MCP sunucusu durumu / yeniden başlatma
+omniroute a2a status | card            # A2A sunucusu durumu / aracı kartı
 
 omniroute tunnel list | create | stop  # Tünelleri yönet (cloudflare/tailscale/ngrok)
-omniroute env show | get <k> | set <k> <v>  # Çevre değişkenlerini denetle / ayarla (geçici)
+omniroute env show | get <k> | set <k> <v>  # Ortam değişkenlerini incele / ayarla (geçici)
 
-omniroute test                         # Sağlayıcı bağlantı testi
-omniroute update                       # Güncellemeleri kontrol et
-omniroute completion                   # Shell tamamlama oluştur
+omniroute test                         # Sağlayıcı bağlantısı hızlı testi
+omniroute update                       # Güncellemeleri denetle
+omniroute completion                   # Kabuk tamamlama betiği oluştur
 ```
 
 ### Yaygın bayraklar
 
-| Bayrak              | Açıklama                                                  |
-| ------------------- | --------------------------------------------------------- |
-| `--no-open`         | Başlangıçta tarayıcıyı otomatik açma                      |
-| `--port <n>`        | API portunu geçersiz kıl (varsayılan 20128)               |
-| `--mcp`             | IDE'ler için stdio üzerinden MCP sunucusu olarak çalıştır |
-| `--non-interactive` | CI modu (hiçbir istem; çevre/bayraklardan okur)           |
-| `--json`            | Makine okunabilir JSON çıktısı (doctor, providers, vb.)   |
-| `--help`, `-h`      | Komut spesifik yardım göster                              |
-| `--version`, `-v`   | Yüklenen sürümü yazdır                                    |
+| Bayrak              | Açıklama                                                          |
+| ------------------- | ----------------------------------------------------------------- |
+| `--no-open`         | Başlangıçta tarayıcıyı otomatik olarak açma                       |
+| `--port <n>`        | API bağlantı noktasını geçersiz kıl (varsayılan 20128)            |
+| `--mcp`             | stdio üzerinden MCP sunucusu olarak çalıştır (IDE'ler için)       |
+| `--non-interactive` | CI modu (istem yoktur; ortam değişkenlerinden/bayraklardan okur)  |
+| `--json`            | Makine tarafından okunabilir JSON çıktısı (doctor, providers vb.) |
+| `--help`, `-h`      | Komuta özgü yardımı göster                                        |
+| `--version`, `-v`   | Yüklü sürümü yazdır                                               |
 
 ---
 
-## Mevcut API Uç Noktaları
+## Kullanılabilir API Uç Noktaları
 
 | Uç Nokta                   | Açıklama                           | Kullanım Alanı                  |
 | -------------------------- | ---------------------------------- | ------------------------------- |
 | `/v1/chat/completions`     | Standart sohbet (tüm sağlayıcılar) | Tüm modern araçlar              |
-| `/v1/responses`            | Yanıtlar API'si (OpenAI formatı)   | Codex, ajans iş akışları        |
-| `/v1/completions`          | Eski metin tamamlama               | `prompt:` kullanan eski araçlar |
-| `/v1/embeddings`           | Metin gömme                        | RAG, arama                      |
-| `/v1/images/generations`   | Görüntü üretimi                    | GPT-Image, Flux, vb.            |
+| `/v1/responses`            | Responses API (OpenAI biçimi)      | Codex, otonom iş akışları       |
+| `/v1/completions`          | Eski metin tamamlamaları           | `prompt:` kullanan eski araçlar |
+| `/v1/embeddings`           | Metin gömmeleri                    | RAG, arama                      |
+| `/v1/images/generations`   | Görsel oluşturma                   | GPT-Image, Flux vb.             |
 | `/v1/audio/speech`         | Metinden sese                      | ElevenLabs, OpenAI TTS          |
-| `/v1/audio/transcriptions` | Sesten metne                       | Deepgram, AssemblyAI            |
+| `/v1/audio/transcriptions` | Konuşmadan metne                   | Deepgram, AssemblyAI            |
 
-Yapıştırmaya hazır örnekler ile token'lı OmniRoute URL'si:
+Token içeren bir OmniRoute URL'siyle kullanıma hazır örnekler:
 
 ```txt
 Token örneği: sk-a3ab3c080beaee3a-69f4a4-070d71af
@@ -740,12 +751,12 @@ Ollama sohbeti: http://localhost:20128/api/v1/vscode/sk-a3ab3c080beaee3a-69f4a4-
 
 ## Sorun Giderme
 
-| Hata                                                 | Sebep                              | Çözüm                                             |
-| ---------------------------------------------------- | ---------------------------------- | ------------------------------------------------- |
-| `Connection refused`                                 | OmniRoute çalışmıyor               | `omniroute serve`                                 |
-| `401 Unauthorized`                                   | Yanlış API anahtarı                | `/dashboard/api-manager` içinde kontrol edin      |
-| `No combo configured`                                | Aktif yönlendirme kombinasyonu yok | `/dashboard/combos` içinde ayarlayın              |
-| CLI "not installed" gösteriyor                       | İkili dosya PATH'te değil          | `which <command>` kontrol edin                    |
-| Dashboard kurulumdan sonra "not detected" gösteriyor | Önbellek eski                      | Dashboard'da "⟳ Tespiti yenile" butonuna tıklayın |
-| Eski bağlantı `/dashboard/cli-tools`                 | Pre-v3.8.6 yer imi                 | `/dashboard/cli-code` (308) yönlendirilmiştir     |
-| Eski bağlantı `/dashboard/agents`                    | Pre-v3.8.6 yer imi                 | `/dashboard/acp-agents` (308) yönlendirilmiştir   |
+| Hata                                             | Neden                         | Çözüm                                                         |
+| ------------------------------------------------ | ----------------------------- | ------------------------------------------------------------- |
+| `Connection refused`                             | OmniRoute çalışmıyor          | `omniroute serve`                                             |
+| `401 Unauthorized`                               | Yanlış API anahtarı           | `/dashboard/api-manager` bölümünden kontrol edin              |
+| `No combo configured`                            | Etkin yönlendirme kombosu yok | `/dashboard/combos` bölümünde ayarlayın                       |
+| CLI "not installed" gösteriyor                   | İkili dosya PATH'te değil     | `which <command>` komutuyla kontrol edin                      |
+| Kurulumdan sonra panel "not detected" gösteriyor | Önbellek güncel değil         | Panelde "⟳ Algılamayı yenile" seçeneğine tıklayın             |
+| Eski bağlantı `/dashboard/cli-tools`             | v3.8.6 öncesi yer imi         | `/dashboard/cli-code` adresine otomatik yönlendirilir (308)   |
+| Eski bağlantı `/dashboard/agents`                | v3.8.6 öncesi yer imi         | `/dashboard/acp-agents` adresine otomatik yönlendirilir (308) |

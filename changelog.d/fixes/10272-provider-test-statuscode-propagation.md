@@ -1,1 +1,0 @@
-- **fix(providers):** preserve validator HTTP status codes in API-key and web connection-test results so callers can distinguish authentication, rate-limit, and upstream failures ([#10272](https://github.com/diegosouzapw/OmniRoute/pull/10272)) — thanks @Zartharas

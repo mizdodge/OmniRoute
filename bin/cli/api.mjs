@@ -52,6 +52,19 @@ function resolveUrl(path, opts) {
   return `${getBaseUrl(opts)}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** The machine-derived token is valid only for the local loopback server. */
+export function isLoopbackUrl(value) {
+  try {
+    const hostname = new URL(value).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (hostname === "localhost" || hostname === "::1") return true;
+    if (/^127(?:\.[0-9]{1,3}){3}$/.test(hostname)) return true;
+    if (/^::ffff:(?:127\.|7f[0-9a-f]{2}:)/i.test(hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function buildHeaders(opts) {
   const headers = new Headers(opts.headers || {});
   if (!headers.has("accept")) headers.set("accept", "application/json");
@@ -87,10 +100,17 @@ export async function buildHeaders(opts) {
   if (auth && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${auth}`);
   }
-  // Inject machine-id derived CLI token; env var override for testing.
-  const cliToken = opts.cliToken ?? process.env.OMNIROUTE_CLI_TOKEN ?? (await getCliToken());
-  if (cliToken && !headers.has(CLI_TOKEN_HEADER)) {
-    headers.set(CLI_TOKEN_HEADER, cliToken);
+  // Inject the machine-derived credential only for an explicit local loopback
+  // destination. Remote contexts and absolute remote URLs use scoped access
+  // tokens and must never receive this machine-bound local credential.
+  const destinationUrl = opts.destinationUrl ?? getBaseUrl(opts);
+  if (!isLoopbackUrl(destinationUrl)) {
+    headers.delete(CLI_TOKEN_HEADER);
+  } else {
+    const cliToken = opts.cliToken ?? process.env.OMNIROUTE_CLI_TOKEN ?? (await getCliToken());
+    if (cliToken && !headers.has(CLI_TOKEN_HEADER)) {
+      headers.set(CLI_TOKEN_HEADER, cliToken);
+    }
   }
   if (opts.idempotencyKey && !headers.has("idempotency-key")) {
     headers.set("idempotency-key", opts.idempotencyKey);
@@ -195,8 +215,12 @@ function fetchOnce(url, init, timeoutMs) {
 export async function apiFetch(path, opts = {}) {
   const method = String(opts.method || "GET").toUpperCase();
   const url = resolveUrl(path, opts);
-  const headers = await buildHeaders(opts);
+  const headers = await buildHeaders({ ...opts, destinationUrl: url });
   const body = serializeBody(opts.body, headers);
+  // Undici preserves custom headers across cross-origin redirects. A local server
+  // redirect must never turn the loopback machine credential into an outbound
+  // secret, so fail redirects whenever this header is present.
+  const redirect = headers.has(CLI_TOKEN_HEADER) ? "error" : opts.redirect;
   const timeout =
     opts.timeout ?? (Number.parseInt(process.env.OMNIROUTE_HTTP_TIMEOUT_MS || "", 10) || 30000);
   const maxAttempts = opts.retry === false ? 1 : (opts.retryMax ?? RETRY_DEFAULTS.maxAttempts);
@@ -205,7 +229,7 @@ export async function apiFetch(path, opts = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const res = await fetchOnce(url, { method, headers, body }, timeout);
+      const res = await fetchOnce(url, { method, headers, body, redirect }, timeout);
       if (res.ok) return enrichResponse(res, opts);
       if (attempt < maxAttempts && shouldRetryStatus(res.status, method, opts)) {
         const delay = computeBackoff(attempt, res.headers.get("retry-after"));

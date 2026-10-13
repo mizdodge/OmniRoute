@@ -128,7 +128,7 @@ test("falls back to COMMON_PROVIDERS when no catalog is present", () => {
     assert.equal(providers.length, COMMON_PROVIDERS.length);
     assert.equal(providers[0].id, "openai");
   } finally {
-    fs.rmSync(emptyRoot, { recursive: true, force: true });
+    fs.rmSync(emptyRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -147,6 +147,6 @@ test("an explicit catalogPath still overrides the directory walk", () => {
       ["only"]
     );
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

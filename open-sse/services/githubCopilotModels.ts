@@ -18,43 +18,49 @@
  * offline/unauthed/failed refresh so the import flow never breaks.
  */
 import { getGitHubCopilotChatHeaders } from "../config/providerHeaderProfiles.ts";
+import { isRetiredGitHubCopilotModelId } from "../config/providers/registry/github/retiredModels.ts";
 
 export const GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
-export const GITHUB_COPILOT_MODEL_ALLOWLIST = [
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-opus-4.8-fast",
-  "claude-opus-4.8",
-  "claude-opus-4.7",
-  "claude-sonnet-4.6",
-  "claude-opus-4.5",
-  "claude-sonnet-5",
-  "claude-sonnet-4.5",
-  "claude-haiku-4.5",
-  "gemini-3.1-pro-preview",
-  "gemini-3.7-flash",
+
+// Static fallback catalog. Used ONLY when live discovery is unavailable
+// (offline / unauthed / upstream error): the account's real entitlements can't
+// be read, so we fall back to this curated set of known-good chat ids. It is
+// NOT used to gate the LIVE response — see parseGitHubCopilotModels, which keeps
+// every entitled chat model the catalog returns (so newly-entitled models like
+// grok-4.6 / mai-code-1.1-flash / gemini-3.8-flash appear without a code edit).
+// Upstream retirements and explicit local removals are excluded from both results.
+// Avoid importing the provider registry here; its initialization graph can
+// recurse through catalog metadata and affect unrelated providers.
+export const GITHUB_COPILOT_STATIC_FALLBACK_MODELS: readonly string[] = Object.freeze([
+  "gpt-6-astra",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-5.3-codex",
-  "gpt-5-mini",
-  "gpt-4o-2024-11-20",
-  "gpt-4o-mini",
-  "gpt-4-0125-preview",
-  "kimi-k2.7-code",
-  "mai-code-1-flash",
-  "oswe-vscode-prime",
-] as const;
+  "claude-fable-5.1",
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-sonnet-5-5",
+  "claude-opus-4.8-fast",
+  "claude-opus-4.8",
+  "claude-haiku-4.5",
+  "gemini-3.8-flash",
+  "mai-code-1.1-flash",
+  "kimi-k3",
+  "grok-4.6",
+]);
 
-const GITHUB_COPILOT_MODEL_ALLOWLIST_SET = new Set<string>(GITHUB_COPILOT_MODEL_ALLOWLIST);
+// Back-compat alias: earlier code + tests imported this name. It is now the
+// static FALLBACK catalog, not a live-response gate.
+export const GITHUB_COPILOT_MODEL_ALLOWLIST = GITHUB_COPILOT_STATIC_FALLBACK_MODELS;
+
+const GITHUB_COPILOT_STATIC_FALLBACK_SET = new Set<string>(GITHUB_COPILOT_STATIC_FALLBACK_MODELS);
 
 export type GitHubCopilotModel = {
   id: string;
   name: string;
   owned_by: string;
+  supportedEndpoints?: string[];
+  targetFormat?: "openai-responses";
 };
 
 type RawRecord = Record<string, unknown>;
@@ -69,10 +75,95 @@ function toNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function getSupportedEndpoints(item: RawRecord): string[] {
+  const capabilities = asRecord(item.capabilities);
+  const endpoints = Array.isArray(item.supported_endpoints)
+    ? item.supported_endpoints
+    : Array.isArray(capabilities.supported_endpoints)
+      ? capabilities.supported_endpoints
+      : [];
+  return Array.from(
+    new Set(endpoints.map(toNonEmptyString).filter((e): e is string => !!e))
+  ).sort();
+}
+
+function getEndpointMetadata(item: RawRecord, modelId: string): Partial<GitHubCopilotModel> {
+  const paths = getSupportedEndpoints(item).map((endpoint) =>
+    endpoint.toLowerCase().replace(/^\/+/, "").replace(/^v1\//, "").replace(/\/$/, "")
+  );
+  // The public catalog uses endpoint kinds rather than upstream URL paths.
+  const supportedEndpoints = Array.from(
+    new Set(
+      paths
+        .map((path) =>
+          path === "chat/completions" || path === "chat-completions" || path === "messages"
+            ? "chat"
+            : path
+        )
+        .filter(Boolean)
+    )
+  ).sort();
+  if (supportedEndpoints.length === 0) return {};
+  // Copilot's endpoint contract, not the model's version, determines the wire format.
+  // Keep chat-capable models on their existing route and mirror the executor's
+  // defensive exclusion of Claude/Gemini from the Responses endpoint.
+  const responsesOnly =
+    supportedEndpoints.includes("responses") &&
+    !supportedEndpoints.includes("chat") &&
+    !/claude|gemini/i.test(modelId);
+  return {
+    supportedEndpoints,
+    ...(responsesOnly ? { targetFormat: "openai-responses" as const } : {}),
+  };
+}
+
+// Decide whether a live /models row is a routable chat model. Capability-driven
+// (rename-robust) rather than an id allowlist: any model the account is entitled
+// to whose capabilities.type is "chat" (or that carries a chat-shaped
+// supported_endpoints) is kept, so a newly-entitled model shows up with no code
+// change. Also filters out rows when policy.state is set and != "enabled", or
+// when model_picker_enabled=false. Explicitly non-chat rows (embeddings /
+// completion) are dropped as well.
+function isRoutableChatModel(item: RawRecord): boolean {
+  const policy = asRecord(item.policy);
+  const policyState = toNonEmptyString(policy.state);
+  if (policyState && policyState !== "enabled") return false;
+  if (item.model_picker_enabled === false) return false;
+
+  const capabilities = asRecord(item.capabilities);
+  const capType = toNonEmptyString(capabilities.type);
+  if (capType) return capType === "chat";
+
+  // No capabilities.type present — fall back to supported_endpoints shape. A
+  // chat model exposes /chat/completions, /responses, or /v1/messages.
+  const endpoints = Array.isArray(item.supported_endpoints)
+    ? (item.supported_endpoints as unknown[])
+    : Array.isArray((asRecord(item.capabilities) as RawRecord).supported_endpoints)
+      ? ((asRecord(item.capabilities) as RawRecord).supported_endpoints as unknown[])
+      : [];
+  if (endpoints.length > 0) {
+    return endpoints.some((e) => {
+      const s = toNonEmptyString(e) || "";
+      return (
+        s.includes("/chat/completions") || s.includes("/responses") || s.includes("/v1/messages")
+      );
+    });
+  }
+
+  // Neither signal present: keep it unless its id looks like a known non-chat
+  // utility (embedding / completion sentinels). This keeps discovery permissive
+  // without re-introducing a brittle positive allowlist.
+  const id = (toNonEmptyString(item.id) || toNonEmptyString(item.model) || "").toLowerCase();
+  if (!id) return false;
+  return !(id.includes("embedding") || id === "gpt-41-copilot");
+}
+
 /**
- * Parse a Copilot `/models` response into managed model rows. Only ids present
- * in the live response are returned, which is exactly the entitlement filter
- * #3121 requires.
+ * Parse a Copilot `/models` response into managed chat-model rows. Keeps every
+ * entitled CHAT model in the live response (capability-driven filtering) and
+ * drops non-chat, hidden, policy-disabled, and explicitly retired rows.
+ * Newly entitled models need no allowlist update; announced retirements are
+ * excluded even while upstream continues returning them during the transition.
  */
 export function parseGitHubCopilotModels(data: unknown): GitHubCopilotModel[] {
   const payload = asRecord(data);
@@ -89,10 +180,11 @@ export function parseGitHubCopilotModels(data: unknown): GitHubCopilotModel[] {
     const item = asRecord(value);
     const id = toNonEmptyString(item.id) || toNonEmptyString(item.model);
     if (!id || seen.has(id)) continue;
-    if (!GITHUB_COPILOT_MODEL_ALLOWLIST_SET.has(id)) continue;
+    if (isRetiredGitHubCopilotModelId("github", id)) continue;
+    if (!isRoutableChatModel(item)) continue;
     seen.add(id);
     const name = toNonEmptyString(item.name) || toNonEmptyString(item.display_name) || id;
-    models.push({ id, name, owned_by: "github" });
+    models.push({ id, name, owned_by: "github", ...getEndpointMetadata(item, id) });
   }
 
   return models;
@@ -120,7 +212,7 @@ function toFallbackResult(
     .map((model) => {
       const id = toNonEmptyString(model.id);
       if (!id) return null;
-      if (!GITHUB_COPILOT_MODEL_ALLOWLIST_SET.has(id)) return null;
+      if (!GITHUB_COPILOT_STATIC_FALLBACK_SET.has(id)) return null;
       return { id, name: toNonEmptyString(model.name) || id, owned_by: "github" };
     })
     .filter((model): model is GitHubCopilotModel => Boolean(model));

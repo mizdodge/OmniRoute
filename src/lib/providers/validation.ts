@@ -7,6 +7,7 @@ import {
   isOpenAICompatibleProvider,
   isSelfHostedChatProvider,
   providerAllowsOptionalApiKey,
+  resolveProviderId,
   WEB_COOKIE_PROVIDERS,
 } from "@/shared/constants/providers";
 import { MODAL_DEFAULT_VALIDATION_MODEL_ID } from "@/shared/constants/modal";
@@ -28,9 +29,7 @@ import {
 import { toValidationErrorResult } from "./validation/transport";
 import {
   validateDeepSeekWebProvider,
-  validateQwenWebProvider,
   validateGrokWebProvider,
-  validateChatGptWebProvider,
   validatePerplexityWebProvider,
   validateBlackboxWebProvider,
   validateKimiWebProvider,
@@ -48,6 +47,7 @@ import {
   validateDevinCloudAgentProvider,
   validateInnerAiProvider,
   validateNotionWebProvider,
+  validateSyntxProvider,
 } from "./validation/webProvidersB";
 import {
   validateHerokuProvider,
@@ -75,11 +75,12 @@ import {
   validateRekaProvider,
   validateMaritalkProvider,
   validateNlpCloudProvider,
+  validateOneMinAiProvider,
   validateRunwayProvider,
   validateNousResearchProvider,
   validatePoeProvider,
 } from "./validation/audioMiscProviders";
-import { validateChatGptWebCodexProvider } from "./validation/chatgptWebCodex";
+import { validateTypesafeProvider } from "./validation/typesafe";
 import { validateZaiWebProvider } from "./validation/zaiWeb";
 import { validateSearchProvider, SEARCH_VALIDATOR_CONFIGS } from "./validation/searchProviders";
 import {
@@ -107,9 +108,13 @@ import {
   validateBytezProvider,
 } from "./validation/webCookie";
 import { validateAiHordeProvider } from "./validation/aihorde";
+import { validateDifyProvider } from "./validation/dify";
+import { validateZyloApiProvider } from "./validation/zylo";
+import { validateAdobeFireflyProvider } from "./validation/adobeFirefly";
 import {
   validateV0VercelProvider,
   validateAuggieProvider,
+  validateCursorApiProvider,
   validateQoderProvider,
   validateKiroProvider,
   validateGitlabProvider,
@@ -119,6 +124,7 @@ import {
   validateNvidiaProvider,
   validateZaiProvider,
   validateXiaomiMimoProvider,
+  validateXiaomiMimoTokenPlanProvider,
   buildGitlawbValidators,
 } from "./validation/specialtyInline";
 // validateCommandCodeProvider + validateClaudeCodeCompatibleProvider have external importers
@@ -137,7 +143,52 @@ export { validateWebCookieProvider, bytezValidationResultFromStatus };
 // validateKiroApiKeyRuntimeProbe now live in ./validation/webCookie and ./validation/kiro.
 // They are re-exported above to preserve the historical public surface.
 
-export async function validateProviderApiKey({ provider, apiKey, providerSpecificData = {} }: any) {
+export async function validateFreebuffProvider({ apiKey }: { apiKey: string }) {
+  if (!apiKey) {
+    return { valid: false, error: "Freebuff Auth Token required", unsupported: false };
+  }
+  try {
+    const res = await fetch("https://www.codebuff.com/api/v1/freebuff/session", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "User-Agent": "codebuff/0.1.0 (darwin-arm64)",
+        "x-freebuff-model": "deepseek/deepseek-v4-flash",
+      },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (res.ok || res.status === 409) {
+      return { valid: true, error: null };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { valid: false, error: "Invalid or expired Freebuff Auth Token", unsupported: false };
+    }
+    const errText = await res.text().catch(() => "");
+    return {
+      valid: false,
+      error: `Freebuff validation returned ${res.status}: ${errText.slice(0, 100)}`,
+      unsupported: false,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { valid: false, error: `Freebuff validation network error: ${msg}`, unsupported: false };
+  }
+}
+
+export async function validateProviderApiKey({
+  provider,
+  apiKey,
+  providerSpecificData = {},
+  // S-01 (#15159): forwarded to specialty validators that can reach a local spawn
+  // (currently only the devin cloud-agent CLI fallback). Remote-reachable routes
+  // pass `false` for non-loopback callers; direct/internal callers keep the
+  // permissive default. See validateDevinCloudAgentProvider for the rationale.
+  allowLocalSpawn = true,
+}: any) {
+  provider = typeof provider === "string" ? resolveProviderId(provider) : provider;
   const requiresApiKey = !providerAllowsOptionalApiKey(provider);
   const isLocal = isLocalProvider(provider);
 
@@ -181,16 +232,40 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     // "devin" is the Cognition cloud-agent provider (distinct from the "devin-cli"
     // LLM/ACP provider, which is already registered in providerRegistry). Wired here
     // for parity with the "jules" cloud-agent entry above — see #6142.
-    devin: validateDevinCloudAgentProvider,
+    // S-01 (#15159): wrapped so the local CLI-spawn fallback receives allowLocalSpawn;
+    // a bare reference would silently drop the flag and let a remote caller spawn.
+    devin: ({ apiKey, allowLocalSpawn }: any) =>
+      validateDevinCloudAgentProvider({ apiKey, allowLocalSpawn }),
     auggie: validateAuggieProvider,
+    "cursor-api": validateCursorApiProvider,
     aihorde: validateAiHordeProvider,
+    // #10522: registered under both the canonical id and the short alias — Firefly
+    // connections are commonly stored as "firefly" (same prefix as firefly/<model>
+    // routing ids), not the canonical "adobe-firefly" WEB_COOKIE_PROVIDERS key.
+    "adobe-firefly": validateAdobeFireflyProvider,
+    firefly: validateAdobeFireflyProvider,
     qoder: validateQoderProvider,
     kiro: validateKiroProvider,
+    freebuff: validateFreebuffProvider,
     "command-code": validateCommandCodeProvider,
     huggingface: validateHuggingFaceProvider,
+    // #11002: Dify serves no OpenAI-compatible route — only POST /v1/chat-messages.
+    // The generic OpenAI-like probe 404s on /v1/models and /v1/chat/completions,
+    // so every real app key was misreported as "endpoint not supported".
+    dify: validateDifyProvider,
     // #5422: auth-only probe — Bytez 404s on every chat model until the account adds it to
     // its catalog, so the generic chat probe can't validate a fresh key.
     bytez: validateBytezProvider,
+    // #13828: Zylo serves GET /v1/models WITHOUT authentication — 200 with no Authorization
+    // header, and 200 for a bogus key. The generic OpenAI-like probe returns on the first 2xx
+    // from that route, so the setup dialog greened any string and the user only discovered the
+    // key was rejected when their own model test came back `401 {"error":"Key not found: zk-…"}`.
+    // Probe the chat route, which is the one Zylo actually authenticates.
+    "zylo-api": validateZyloApiProvider,
+    // Registered under the alias too: connections are commonly stored as "zylo" (same prefix as
+    // the zylo/<model> routing ids), and the alias must not fall back to the open-catalog probe.
+    // Same shape as the adobe-firefly/firefly pair above.
+    zylo: validateZyloApiProvider,
     deepgram: validateDeepgramProvider,
     assemblyai: validateAssemblyAIProvider,
     "rev-ai": validateRevAiProvider,
@@ -205,6 +280,8 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
       validateImageProviderApiKey({ provider: "recraft", apiKey, providerSpecificData }),
     topaz: ({ apiKey, providerSpecificData }: any) =>
       validateImageProviderApiKey({ provider: "topaz", apiKey, providerSpecificData }),
+    magnific: ({ apiKey, providerSpecificData }: any) =>
+      validateImageProviderApiKey({ provider: "magnific", apiKey, providerSpecificData }),
     elevenlabs: validateElevenLabsProvider,
     inworld: validateInworldProvider,
     kie: validateKieProvider,
@@ -248,16 +325,22 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     reka: validateRekaProvider,
     maritalk: validateMaritalkProvider,
     nlpcloud: validateNlpCloudProvider,
+    oneminai: validateOneMinAiProvider,
     runwayml: validateRunwayProvider,
+    typesafe: ({ apiKey }: any) => validateTypesafeProvider({ apiKey }),
     snowflake: validateSnowflakeProvider,
     gigachat: validateGigachatProvider,
     "deepseek-web": validateDeepSeekWebProvider,
     "zai-web": validateZaiWebProvider,
     "grok-web": validateGrokWebProvider,
-    "qwen-web": validateQwenWebProvider,
     "kimi-web": validateKimiWebProvider,
-    "chatgpt-web": validateChatGptWebProvider,
-    "chatgpt-web-codex": validateChatGptWebCodexProvider,
+    "chatgpt-web-codex": (input: {
+      apiKey?: string;
+      providerSpecificData?: Record<string, unknown>;
+    }) =>
+      import("./validation/chatgptWebCodex").then((mod) =>
+        mod.validateChatGptWebCodexProvider(input)
+      ),
     "perplexity-web": validatePerplexityWebProvider,
     "blackbox-web": validateBlackboxWebProvider,
     "muse-spark-web": validateMuseSparkWebProvider,
@@ -270,6 +353,8 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     "copilot-m365-web": validateCopilotM365WebProvider,
     "copilot-web": validateCopilotWebProvider,
     "t3-web": validateT3WebProvider,
+    syntx: validateSyntxProvider,
+    stx: validateSyntxProvider,
     "azure-openai": validateAzureOpenAIProvider,
     "azure-ai": validateAzureAiProvider,
     "voyage-ai": ({ apiKey, providerSpecificData }: any) => {
@@ -293,6 +378,8 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     zai: validateZaiProvider,
     "xiaomi-mimo": ({ apiKey, providerSpecificData }: any) =>
       validateXiaomiMimoProvider({ apiKey, providerSpecificData, isLocal }),
+    "xiaomi-mimo-token-plan": ({ apiKey, providerSpecificData }: any) =>
+      validateXiaomiMimoTokenPlanProvider({ apiKey, providerSpecificData, isLocal }),
     // Gitlawb Opengateway — Xiaomi MiMo compatible, same /models endpoint limitation.
     // Bypass /models probe in favor of chat/completions, matching xiaomi-mimo's pattern.
     // Uses a factory to share validation logic across Opengateway provider variants.
@@ -317,7 +404,11 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
 
   if (SPECIALTY_VALIDATORS[provider]) {
     try {
-      return await SPECIALTY_VALIDATORS[provider]({ apiKey, providerSpecificData });
+      return await SPECIALTY_VALIDATORS[provider]({
+        apiKey,
+        providerSpecificData,
+        allowLocalSpawn,
+      });
     } catch (error: any) {
       return toValidationErrorResult(error);
     }
@@ -325,12 +416,17 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
 
   // Web-cookie providers WITHOUT a dedicated specialty validator above fall back to the generic
   // session-ping check (AUTH_007 SESSION_EXPIRED on 401/403). Providers that DO have a rich
-  // per-provider validator (grok-web, chatgpt-web, claude-web, …) are handled by
+  // per-provider validator (grok-web, perplexity-web, claude-web, etc.) are handled by
   // SPECIALTY_VALIDATORS first and must not be shadowed by this generic probe (issue: the
   // #4023 dispatch was placed too early and intercepted every web-cookie provider).
-  if (WEB_COOKIE_PROVIDERS[provider]) {
+  const canonicalProvider = resolveProviderId(provider);
+  if (WEB_COOKIE_PROVIDERS[canonicalProvider]) {
     try {
-      return await validateWebCookieProvider({ provider, apiKey, providerSpecificData });
+      return await validateWebCookieProvider({
+        provider: canonicalProvider,
+        apiKey,
+        providerSpecificData,
+      });
     } catch (error: any) {
       return toValidationErrorResult(error);
     }

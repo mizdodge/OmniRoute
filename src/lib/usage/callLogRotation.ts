@@ -20,6 +20,7 @@ import {
   type CallLogDetailState,
 } from "./callLogArtifacts";
 import { getCallLogMaxEntries, getCallLogRetentionDays, getCallLogsTableMaxRows } from "../logEnv";
+import { isSqlitePagerCorruptError, notePagerCorruption } from "../db/healthCheck";
 
 const CALL_LOG_ROTATE_THROTTLE_MS = 60_000;
 const CALL_LOG_ROTATE_BATCH_SIZE = 100;
@@ -308,7 +309,29 @@ export function trimCallLogsToMaxRows(
   return { deletedRows, deletedArtifacts };
 }
 
+let callLogRotatePaused = false;
+
+export function isCallLogRotatePaused(): boolean {
+  return callLogRotatePaused;
+}
+
+export function resetCallLogRotateFence(): void {
+  callLogRotatePaused = false;
+}
+
+export function handleCallLogRotateError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("[callLogs] Failed to rotate request artifacts:", message);
+  if (!isSqlitePagerCorruptError(error)) return;
+  callLogRotatePaused = true;
+  notePagerCorruption("call-log-rotate", error);
+  console.error(
+    "[callLogs] SQLITE_CORRUPT during rotation; pausing further rotate writes. Check /api/db/health."
+  );
+}
+
 export function rotateCallLogs() {
+  if (callLogRotatePaused) return;
   try {
     if (!CALL_LOGS_DIR || !fs.existsSync(CALL_LOGS_DIR)) return;
 
@@ -324,7 +347,7 @@ export function rotateCallLogs() {
       minAgeMs: CALL_LOG_ORPHAN_MIN_AGE_MS,
     });
   } catch (error) {
-    console.error("[callLogs] Failed to rotate request artifacts:", (error as Error).message);
+    handleCallLogRotateError(error);
   }
 }
 
@@ -335,7 +358,7 @@ function runScheduledCallLogRotation() {
     try {
       rotateCallLogs();
     } catch (error) {
-      console.error("[callLogs] Failed to rotate request artifacts:", (error as Error).message);
+      handleCallLogRotateError(error);
     } finally {
       callLogRotateInFlight = false;
     }

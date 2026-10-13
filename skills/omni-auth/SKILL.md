@@ -10,7 +10,7 @@ Manage API key authentication and session tokens. Start here to authenticate req
 
 ## Authentication
 
-All requests require a valid Bearer token or session cookie. Obtain a token via `POST /api/auth/login` or configure `REQUIRE_API_KEY=false` for local development.
+Remote API requests use a Bearer credential. Dashboard login is different: `POST /api/auth/login` accepts a management password and returns an `auth_token` session cookie.
 
 ## Endpoints
 
@@ -20,9 +20,9 @@ Authenticate user
 
 ```bash
 curl -X POST https://localhost:20128/api/auth/login \
-  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
   -H "Content-Type: application/json" \
-  -d '{}'
+  -c cookie.jar \
+  -d '{"password":"<management-password>"}'
 ```
 
 ### POST /api/auth/logout
@@ -30,8 +30,10 @@ curl -X POST https://localhost:20128/api/auth/login \
 Log out
 
 ```bash
+CSRF_TOKEN=$(curl -s https://localhost:20128/api/auth/csrf -b cookie.jar | jq -r .token)
 curl -X POST https://localhost:20128/api/auth/logout \
-  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
+  -b cookie.jar \
+  -H "x-omniroute-csrf: $CSRF_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -48,7 +50,7 @@ remains available as a fallback while OIDC is enabled.
 
 ```bash
 curl https://localhost:20128/api/auth/oidc/login \
-  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
+  -b cookie.jar
 ```
 
 ### GET /api/auth/oidc/callback
@@ -64,7 +66,25 @@ JWT used by password login and redirects to `/dashboard`.
 
 ```bash
 curl https://localhost:20128/api/auth/oidc/callback \
-  -H "Authorization: Bearer $OMNIROUTE_TOKEN"
+  -b cookie.jar
+```
+
+### GET /api/auth/csrf
+
+GET auth › csrf
+
+```bash
+curl https://localhost:20128/api/auth/csrf \
+  -b cookie.jar
+```
+
+### GET /api/auth/status
+
+GET auth › status
+
+```bash
+curl https://localhost:20128/api/auth/status \
+  -b cookie.jar
 ```
 
 ## Payloads
@@ -105,30 +125,30 @@ Use `data[].id` as `model` field in requests. Combos appear with `owned_by:"comb
 
 ## Capability skills
 
-| Capability            | Raw URL                                                                                             |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| Chat / code-gen       | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-chat/SKILL.md        |
-| Image generation      | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-image/SKILL.md       |
-| Text-to-speech        | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-tts/SKILL.md         |
-| Speech-to-text        | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-stt/SKILL.md         |
-| Embeddings            | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-embeddings/SKILL.md  |
-| Web search            | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-web-search/SKILL.md  |
-| Web fetch             | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-web-fetch/SKILL.md   |
-| MCP server (107 tools) | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-mcp/SKILL.md         |
-| A2A protocol          | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-a2a/SKILL.md         |
-| Routing & combos      | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-routing/SKILL.md     |
-| Token compression     | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-compression/SKILL.md |
-| Monitoring & health   | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-monitoring/SKILL.md  |
+| Capability             | Raw URL                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| Chat / code-gen        | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Image generation       | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Text-to-speech         | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Speech-to-text         | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Embeddings             | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Web search             | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| Web fetch              | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-inference/SKILL.md      |
+| MCP server (110 tools) | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-mcp/SKILL.md            |
+| A2A protocol           | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-agents-a2a/SKILL.md     |
+| Routing & combos       | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-combos-routing/SKILL.md |
+| Token compression      | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-compression/SKILL.md    |
+| Monitoring & health    | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omni-resilience/SKILL.md     |
 
 ## CLI skills (omniroute binary)
 
-| Capability             | Raw URL                                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| CLI entry point        | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-cli/SKILL.md           |
-| CLI admin & lifecycle  | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-cli-admin/SKILL.md     |
-| CLI providers & keys   | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-cli-providers/SKILL.md |
-| CLI cloud agents       | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-cli-cloud/SKILL.md     |
-| CLI evals & benchmarks | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute-cli-eval/SKILL.md      |
+| Capability                             | Raw URL                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| CLI entry point                        | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/cli-serve/SKILL.md       |
+| CLI admin & lifecycle                  | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/cli-serve/SKILL.md       |
+| CLI providers & keys                   | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/cli-providers/SKILL.md   |
+| CLI cloud agents (`omniroute cloud …`) | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/cli-backup-sync/SKILL.md |
+| CLI evals & benchmarks                 | https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/cli-eval/SKILL.md        |
 
 ## Errors
 

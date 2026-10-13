@@ -15,6 +15,7 @@ import {
   DefaultToolCard,
   DroidToolCard,
   HermesAgentToolCard,
+  GrokBuildToolCard,
   KiloToolCard,
   OpenClawToolCard,
 } from "./index";
@@ -242,6 +243,7 @@ export default function ToolDetailClient({ toolId, category }: ToolDetailClientP
     hasActiveProviders,
     cloudEnabled,
     availableModels,
+    catalog: dynamicModels,
   };
 
   const renderCard = () => {
@@ -268,6 +270,8 @@ export default function ToolDetailClient({ toolId, category }: ToolDetailClientP
         return <CopilotToolCard {...cardProps} />;
       case "hermes-agent":
         return <HermesAgentToolCard {...cardProps} />;
+      case "grok-build":
+        return <GrokBuildToolCard {...cardProps} />;
       case "antigravity":
         return <AntigravityToolCard {...cardProps} />;
       case "custom":

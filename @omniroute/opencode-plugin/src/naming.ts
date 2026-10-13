@@ -23,27 +23,11 @@ const ALIAS_UPPER_MAX_CHARS = 5;
 
 // ── Auto Combo Types ─────────────────────────────────────────────────────
 
-export type AutoVariant =
-  | "coding"
-  | "fast"
-  | "cheap"
-  | "offline"
-  | "smart"
-  | "lkgp";
+export type AutoVariant = "coding" | "fast" | "cheap" | "offline" | "smart" | "lkgp";
 
-export const AUTO_VARIANTS: AutoVariant[] = [
-  "coding",
-  "fast",
-  "cheap",
-  "offline",
-  "smart",
-  "lkgp",
-];
+export const AUTO_VARIANTS: AutoVariant[] = ["coding", "fast", "cheap", "offline", "smart", "lkgp"];
 
-export const AUTO_VARIANT_DESCRIPTIONS: Record<
-  AutoVariant | "default",
-  string
-> = {
+export const AUTO_VARIANT_DESCRIPTIONS: Record<AutoVariant | "default", string> = {
   default: "Best provider via scoring",
   coding: "Quality-first for code tasks",
   fast: "Latency-optimized routing",
@@ -83,24 +67,15 @@ function titleCaseAlias(alias: string): string {
  *   3. Neither → undefined.
  */
 export function shortProviderLabel(
-  enrichment:
-    | { providerDisplayName?: string; providerAlias?: string }
-    | undefined,
+  enrichment: { providerDisplayName?: string; providerAlias?: string } | undefined
 ): string | undefined {
   if (!enrichment) return undefined;
   const raw =
-    typeof enrichment.providerDisplayName === "string"
-      ? enrichment.providerDisplayName.trim()
-      : "";
+    typeof enrichment.providerDisplayName === "string" ? enrichment.providerDisplayName.trim() : "";
   if (raw.length > 0 && raw.length <= PROVIDER_LABEL_MAX_CHARS) return raw;
-  const alias =
-    typeof enrichment.providerAlias === "string"
-      ? enrichment.providerAlias.trim()
-      : "";
+  const alias = typeof enrichment.providerAlias === "string" ? enrichment.providerAlias.trim() : "";
   if (alias.length > 0) {
-    return alias.length <= ALIAS_UPPER_MAX_CHARS
-      ? alias.toUpperCase()
-      : titleCaseAlias(alias);
+    return alias.length <= ALIAS_UPPER_MAX_CHARS ? alias.toUpperCase() : titleCaseAlias(alias);
   }
   // Long displayName with no alias to fall back on: keep the long label
   // rather than dropping the provider prefix entirely.
@@ -131,10 +106,33 @@ export function normaliseFreeLabel(name: string): string {
 
 // ── Free Budget Formatting ────────────────────────────────────────────────
 
+/** Scales, largest first, so the unit is chosen by descending magnitude. */
+const TOKEN_UNITS = [
+  [1e9, "B"],
+  [1e6, "M"],
+  [1e3, "K"],
+] as const;
+
+/**
+ * Format a token count as a short magnitude string: `25M`, `1.5K`, `999`.
+ *
+ * The unit has to be picked from the value that will actually be *printed*,
+ * not from the raw input. `toFixed(1)` rounds to the nearest tenth, so at the
+ * K scale 999_950 and above render as `1000.0` — and by then the M branch has
+ * already been skipped, producing `1000K` for a number that is `1M`. The same
+ * carry turns just under a billion into `1000M`. When the rounded value reaches
+ * the next scale, re-render at that scale instead.
+ */
 function fmtTokens(n: number): string {
-  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  for (let i = 0; i < TOKEN_UNITS.length; i++) {
+    const [scale, suffix] = TOKEN_UNITS[i]!;
+    if (n < scale) continue;
+    const value = Number((n / scale).toFixed(1));
+    // `Number()` also drops a trailing `.0`, which the previous regex did.
+    if (value < 1000 || i === 0) return `${value}${suffix}`;
+    const [nextScale, nextSuffix] = TOKEN_UNITS[i - 1]!;
+    return `${Number((n / nextScale).toFixed(1))}${nextSuffix}`;
+  }
   return String(n);
 }
 
@@ -184,15 +182,11 @@ export function formatFreeBudget(params: {
  */
 export function formatAutoComboName(
   variant: AutoVariant | undefined,
-  candidateCount?: number,
+  candidateCount?: number
 ): string {
-  const label = variant
-    ? variant.charAt(0).toUpperCase() + variant.slice(1)
-    : "Default";
+  const label = variant ? variant.charAt(0).toUpperCase() + variant.slice(1) : "Default";
   const count =
-    typeof candidateCount === "number" && candidateCount > 0
-      ? ` (${candidateCount}p)`
-      : "";
+    typeof candidateCount === "number" && candidateCount > 0 ? ` (${candidateCount}p)` : "";
   return `Auto: ${label}${count}`;
 }
 

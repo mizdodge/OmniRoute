@@ -22,10 +22,10 @@ describe("MCP Essential Tools", () => {
   });
 
   describe("Tool schema validation", () => {
-    it("should have exactly 13 essential tools (including Radar catalog)", () => {
-      // 12 -> 13: F3 shipped omniroute_radar_catalog as a phase-1 read-only tool.
+    it("should have exactly 14 essential tools (including Radar catalog + x_search)", () => {
+      // 13 -> 14: #10985 shipped omniroute_x_search as a phase-1 tool.
       const schemas = MCP_ESSENTIAL_TOOLS;
-      expect(schemas).toHaveLength(13);
+      expect(schemas).toHaveLength(14);
     });
 
     it("all tools should have omniroute_ prefix", () => {
@@ -294,6 +294,101 @@ describe("omniroute_web_search handler (via MCP dispatch)", () => {
     });
 
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("omniroute_x_search handler (via MCP dispatch)", () => {
+  let client: Client;
+
+  beforeEach(async () => {
+    mockFetch.mockReset();
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer();
+    await server.connect(serverTransport);
+    client = new Client({ name: "test-client", version: "1.0.0" });
+    await client.connect(clientTransport);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it("should appear in tools/list after registration", async () => {
+    const { tools } = await client.listTools();
+    const xSearch = tools.find((t) => t.name === "omniroute_x_search");
+    expect(xSearch).toBeDefined();
+    expect(xSearch?.description).toMatch(/X \(Twitter\)/i);
+  });
+
+  it("should POST to /v1/search with provider x-search and search_type x", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: "xs1",
+        provider: "x-search",
+        query: "SuperGrok",
+        results: [
+          {
+            title: "@xai",
+            url: "https://x.com/xai/status/1",
+            snippet: "Cited SuperGrok discussion.",
+            position: 1,
+          },
+        ],
+        cached: false,
+        usage: { queries_used: 1, search_cost_usd: 0 },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "omniroute_x_search",
+      arguments: { query: "SuperGrok", max_results: 5 },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/search"),
+      expect.objectContaining({ method: "POST" })
+    );
+    const [, options] = mockFetch.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.query).toBe("SuperGrok");
+    expect(body.max_results).toBe(5);
+    expect(body.search_type).toBe("x");
+    expect(body.provider).toBe("x-search");
+  });
+
+  it("should route an explicit Xquik search through xquik-search", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: "xs2",
+        provider: "xquik-search",
+        query: "agents sdk",
+        results: [
+          {
+            title: "@openai",
+            url: "https://x.com/openai/status/1912345678901234567",
+            snippet: "Agents SDK update",
+            position: 1,
+          },
+        ],
+        cached: false,
+        usage: { queries_used: 1, search_cost_usd: 0.00015 },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "omniroute_x_search",
+      arguments: { query: "agents sdk", max_results: 5, provider: "xquik-search" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const [, options] = mockFetch.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.search_type).toBe("x");
+    expect(body.provider).toBe("xquik-search");
   });
 });
 

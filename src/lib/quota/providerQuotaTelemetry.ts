@@ -48,12 +48,6 @@ export interface ProviderConnectionForQuota {
   [key: string]: unknown;
 }
 
-export interface ProviderQuotaMonitor {
-  providerId: string;
-  supportedDimensions(): Promise<QuotaDimensionName[]>;
-  fetchQuotaState(connection: ProviderConnectionForQuota): Promise<ProviderQuotaState>;
-}
-
 export type QuotaSourceKind =
   "provider_api" | "response_headers" | "configured" | "estimated" | "unknown";
 

@@ -19,6 +19,8 @@ export interface BridgeModalityStats {
   resultCacheBytes: number;
   resultCacheHits: number;
   resultCacheLatencyMs: number;
+  /** Requests that joined an in-flight complete result instead of hitting the persistent cache. */
+  resultSingleflightCoalesced: number;
   failures: number;
   /** Audio/video fusion runs (video bridge only; 0 for other modalities). */
   fusionRuns: number;
@@ -47,6 +49,7 @@ function emptyStats(): BridgeModalityStats {
     resultCacheBytes: 0,
     resultCacheHits: 0,
     resultCacheLatencyMs: 0,
+    resultSingleflightCoalesced: 0,
     failures: 0,
     fusionRuns: 0,
     fusionPartials: 0,
@@ -69,6 +72,8 @@ export function recordBridgeUse(
     resultCacheBytes?: number;
     resultCacheHit?: boolean;
     resultCacheLatencyMs?: number;
+    /** True only when this request joined existing in-flight result work. */
+    resultSingleflightCoalesced?: boolean;
   } = {}
 ): void {
   const s = stats[kind];
@@ -104,6 +109,7 @@ export function recordBridgeUse(
       s.resultCacheLatencyMs += Math.max(0, opts.resultCacheLatencyMs);
     }
   }
+  if (opts.resultSingleflightCoalesced) s.resultSingleflightCoalesced += 1;
   if (typeof opts.latencyMs === "number" && Number.isFinite(opts.latencyMs)) {
     s.totalLatencyMs += Math.max(0, opts.latencyMs);
     s.latencySamples += 1;

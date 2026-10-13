@@ -1,2 +1,0 @@
-- **feat(providers):** AI Horde accepts an optional registered API key and advertises only live image models that currently have workers ([#10542](https://github.com/diegosouzapw/OmniRoute/pull/10542))
-- **fix(providers):** AI Horde Check validates keys via `/v2/find_user` instead of the unauthenticated OpenAI models list ([#10542](https://github.com/diegosouzapw/OmniRoute/pull/10542))

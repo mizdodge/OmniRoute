@@ -1,1 +1,0 @@
-- feat(dashboard): opt-in `DASHBOARD_ALLOW_EMBED=vscode` relaxes CSP `frame-ancestors` to `'self' vscode-webview:` and drops `X-Frame-Options` for HTML pages only, so the dashboard renders inside the VS Code Simple Browser (OmniCopilot). Default posture unchanged — API routes stay unframable (#10273)

@@ -23,6 +23,19 @@ export interface ScoringFactors {
   sessionAvailability?: number;
   resetWindowAffinity: number;
   connectionDensity: number;
+  /**
+   * Feedback-driven quality signal [0,1] from the routing-event quality tracker
+   * (open-sse/services/routing/quality.ts). Optional so cold candidates with no
+   * observed events default to neutral (0.5) and are never penalized.
+   */
+  quality?: number;
+  /**
+   * Observed success share over the routing window: 1 - failure rate. Optional
+   * so a candidate nobody has called yet reads as 1 rather than 0 -- it has not
+   * failed anything. That differs from `quality` on purpose: a score with no
+   * observations is neutral at 0.5, a failure rate with no observations is 0.
+   */
+  reliability?: number;
   /** Request-aware suitability for a configured Fast Worker combo step. */
   fastWorkerPoolSuitability?: number;
   /** Request-aware suitability for a configured Strong Reasoning combo step. */
@@ -44,13 +57,17 @@ export interface ScoringWeights {
   sessionAvailability?: number;
   resetWindowAffinity: number;
   connectionDensity: number;
+  /** Weight for the feedback-driven quality factor (#feedback-foundation). */
+  quality?: number;
+  /** Weight for the observed failure-rate factor. 0 by default. */
+  reliability?: number;
   fastWorkerPoolSuitability?: number;
   strongReasoningPoolSuitability?: number;
 }
 
 export const DEFAULT_WEIGHTS: ScoringWeights = {
   quota: 0.1429,
-  health: 0.1905,
+  health: 0.1605,
   costInv: 0.1429,
   latencyInv: 0.1143,
   taskFit: 0.0762,
@@ -63,6 +80,17 @@ export const DEFAULT_WEIGHTS: ScoringWeights = {
   sessionAvailability: 0.0476,
   resetWindowAffinity: 0,
   connectionDensity: 0.0476,
+  // Shifted from `health` (0.1905 → 0.1605): availability stays dominant, and
+  // the new quality signal (observed output quality over time) gets a real,
+  // if smaller, vote. Sum remains exactly 1.0.
+  quality: 0.03,
+  // Declared but silent in DEFAULT (like `cacheAffinity`/`resetWindowAffinity`):
+  // every candidate already carries a measured failure rate (24h of usage
+  // history behind a ten-sample floor, real-time metrics otherwise) and the
+  // scorer had no way to read it. Which weight it deserves is a product call
+  // backed by measurement, so DEFAULT ships at 0 and leaves the ranking as
+  // it was; `reliability-first` ships at 0.04 and generic packs at 0.03.
+  reliability: 0,
   fastWorkerPoolSuitability: 0,
   strongReasoningPoolSuitability: 0,
 };
@@ -151,6 +179,12 @@ export interface ProviderCandidate {
   sessionAvailability?: number;
   /** Score [0..1] for quota reset-window preference; sooner selected reset windows score higher. */
   resetWindowAffinity?: number;
+  /**
+   * Feedback-driven quality score [0..1] for this provider/model from the
+   * routing-event quality tracker (open-sse/services/routing). Omitted/undefined
+   * candidates default to a neutral 0.5 in calculateFactors.
+   */
+  quality?: number;
   connectionPoolSize?: number;
   connectionId?: string;
   fastWorkerPoolSuitability?: number;
@@ -188,6 +222,8 @@ export function calculateScore(factors: ScoringFactors, weights: ScoringWeights)
       (weights.sessionAvailability ?? 0) * (factors.sessionAvailability ?? 1) +
       (weights.resetWindowAffinity ?? 0) * factors.resetWindowAffinity +
       (weights.connectionDensity ?? 0) * factors.connectionDensity +
+      (weights.quality ?? 0) * (factors.quality ?? 0.5) +
+      (weights.reliability ?? 0) * (factors.reliability ?? 1) +
       (weights.fastWorkerPoolSuitability ?? 0) * (factors.fastWorkerPoolSuitability ?? 0) +
       (weights.strongReasoningPoolSuitability ?? 0) * (factors.strongReasoningPoolSuitability ?? 0)
   );
@@ -214,6 +250,19 @@ export function calculateTierScore(
       : 0;
 
   return Math.min(1, baseScore * 0.8 + resetBonus * 0.2);
+}
+
+/**
+ * Project the account tier from a provider connection row.
+ * Tier whitelist in ONE place: test and combo.ts import this, never mirror it.
+ */
+export function projectAccountTier(
+  row: Record<string, unknown> | undefined
+): "ultra" | "pro" | "standard" | "free" | undefined {
+  const psd = row?.providerSpecificData as Record<string, unknown> | undefined;
+  const raw = row?.accountTier ?? psd?.accountTier;
+  const v = typeof raw === "string" ? raw.toLowerCase() : undefined;
+  return v === "ultra" || v === "pro" || v === "standard" || v === "free" ? v : undefined;
 }
 
 function calculateTierAffinity(
@@ -282,6 +331,25 @@ export function computePoolMaxima(pool: ProviderCandidate[]): PoolMaxima {
   return { maxCost, maxLatency, maxStdDev };
 }
 
+/**
+ * Bound an observed failure rate to [0,1], treating anything missing or
+ * non-finite as 0 (nothing observed has failed). Mirrors `toBoundedRate` in
+ * `speedRanking.ts` so both consumers of the same signal agree, including on
+ * garbage input.
+ */
+/** Reliability factor from an observed failure (else error) rate; absent reads fully reliable. */
+export function reliabilityFactor(candidate: {
+  failureRate?: number | null;
+  errorRate?: number | null;
+}): number {
+  return clamp01(1 - boundedRate(candidate.failureRate ?? candidate.errorRate));
+}
+
+function boundedRate(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  return Math.min(1, value);
+}
+
 export function calculateFactors(
   candidate: ProviderCandidate,
   pool: ProviderCandidate[],
@@ -316,6 +384,16 @@ export function calculateFactors(
     sessionAvailability: clamp01(candidate.sessionAvailability ?? 1),
     resetWindowAffinity: clamp01(candidate.resetWindowAffinity ?? 0.5),
     connectionDensity: clamp01(((candidate.connectionPoolSize ?? 1) - 1) / 10),
+    // Feedback quality signal; neutral 0.5 when the tracker has no data yet
+    // (cold providers are neither boosted nor unfairly penalized).
+    quality: clamp01(candidate.quality ?? 0.5),
+    // Same formula and same precedence as `speedRanking.ts` uses for its own
+    // reliability factor: an explicit failure rate wins over the coarser error
+    // rate, and an unobserved candidate reads as fully reliable. The rate is
+    // bounded BEFORE the subtraction, exactly as `toBoundedRate` does there --
+    // `clamp01(1 - NaN)` would be 0, i.e. "fails every call", which is the
+    // opposite of what corrupt telemetry should mean.
+    reliability: reliabilityFactor(candidate),
     fastWorkerPoolSuitability: clamp01(candidate.fastWorkerPoolSuitability ?? 0),
     strongReasoningPoolSuitability: clamp01(candidate.strongReasoningPoolSuitability ?? 0),
   };

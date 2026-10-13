@@ -319,7 +319,15 @@ type BadgeCriteria =
 // ─── Helper: Action Count ────────────────────────────────────────────────────
 
 /**
- * Get the total count of a specific action for an API key from the XP audit log.
+ * Get the durable lifetime count of a specific action for an API key.
+ *
+ * Reads the durable `xp_action_counts` counter (#12546) rather than counting
+ * rows in `xp_audit_log`. The audit log is pruned by `retention.xpAuditLog`
+ * (default 30 days), so counting it directly turned every "lifetime"
+ * action-count milestone into "actions in the last 30 days". The counter is
+ * incremented in `addXp()` alongside each audit insert and is never touched by
+ * the retention prune, so `checkActionCountBadges()` (events.ts) and this
+ * function now agree on the same durable source.
  */
 async function getActionCount(apiKeyId: string, action: string): Promise<number> {
   const { getDbInstance } = await import("../db/core");
@@ -327,14 +335,7 @@ async function getActionCount(apiKeyId: string, action: string): Promise<number>
 
   const row = db
     .prepare(
-      `SELECT COALESCE(SUM(
-        CASE WHEN metadata IS NOT NULL
-          THEN CAST(json_extract(metadata, '$.amount') AS INTEGER)
-          ELSE 1
-        END
-      ), 0) AS total
-      FROM xp_audit_log
-      WHERE api_key_id = ? AND action = ?`
+      `SELECT count AS total FROM xp_action_counts WHERE api_key_id = ? AND action = ?`
     )
     .get(apiKeyId, action) as { total: number } | undefined;
 
@@ -374,29 +375,6 @@ async function getStreak(apiKeyId: string): Promise<number> {
   return data.currentStreak;
 }
 
-// ─── Helper: Leaderboard Rank ────────────────────────────────────────────────
-
-/**
- * Get the rank of an API key on the global leaderboard.
- * Rank = number of users with a higher score + 1.
- */
-async function getRank(apiKeyId: string, scope: string): Promise<number> {
-  const { getDbInstance } = await import("../db/core");
-  const db = getDbInstance();
-
-  const scoreRow = db
-    .prepare("SELECT score FROM leaderboard WHERE api_key_id = ? AND scope = ?")
-    .get(apiKeyId, scope) as { score: number } | undefined;
-
-  if (!scoreRow) return Infinity;
-
-  const rankRow = db
-    .prepare("SELECT COUNT(*) AS rank FROM leaderboard WHERE scope = ? AND score > ?")
-    .get(scope, scoreRow.score) as { rank: number } | undefined;
-
-  return (rankRow?.rank ?? 0) + 1;
-}
-
 // ─── Badge Evaluation Engine ─────────────────────────────────────────────────
 
 /**
@@ -417,7 +395,8 @@ export async function evaluateBadges(
   metadata?: Record<string, unknown>
 ): Promise<string[]> {
   // Import DB functions dynamically to avoid circular deps
-  const { getBadgeDefinitions, unlockBadge, getBadges } = await import("../db/gamification");
+  const { getBadgeDefinitions, unlockBadge, getBadges, getRank } =
+    await import("../db/gamification");
 
   const definitions = getBadgeDefinitions();
   const earned = getBadges(apiKeyId);
@@ -477,8 +456,9 @@ export async function evaluateBadges(
       }
 
       case "rank": {
-        const rank = await getRank(apiKeyId, "global");
-        unlocked = rank <= criteria.threshold;
+        // getRank returns 0 for a key with no leaderboard entry — that is unranked, not rank 0.
+        const rank = getRank(apiKeyId, "global");
+        unlocked = rank > 0 && rank <= criteria.threshold;
         break;
       }
 

@@ -50,7 +50,6 @@ export const OPTIONAL_PACKS = [
       { name: "@huggingface/transformers" },
       { name: "onnxruntime-node" },
       { name: "@atjsh/llmlingua-2" },
-      { name: "@tensorflow/tfjs" },
       { name: "js-tiktoken" },
     ],
   },
@@ -58,7 +57,7 @@ export const OPTIONAL_PACKS = [
     name: "browser-runtime",
     packVersion: 1,
     description:
-      "Browser automation closure: Claude Turnstile solver and ChatGPT/Gemini web executors",
+      "Browser automation closure: Claude Turnstile solver and ChatGPT Web (Codex)/Gemini web executors",
     packages: [{ name: "playwright" }, { name: "playwright-core" }],
   },
 ];
@@ -156,7 +155,7 @@ export async function dirChecksum(dir) {
       hash.update(String(size));
       hash.update("\0");
       try {
-        // Stream to keep memory bounded on multi-hundred-MB packages (tfjs).
+        // Stream to keep memory bounded on multi-hundred-MB packages (onnxruntime-node).
         for await (const chunk of createReadStream(absolute)) hash.update(chunk);
       } catch {
         hash.update("<unreadable>");

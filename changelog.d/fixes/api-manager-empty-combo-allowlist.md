@@ -1,1 +1,0 @@
-- **fix(api-manager):** Allowed Combos can now be restricted to zero entries: **All** is stored explicitly as `combo/*`, while **Restrict** with no selection saves an empty allowlist that denies Combo routes without blocking direct models. Existing keys are migrated to preserve their previous allow-all behavior.

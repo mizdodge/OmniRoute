@@ -1,1 +1,0 @@
-- fix(backend): redact client IPs and account prefixes from default proxy logs (#10348)

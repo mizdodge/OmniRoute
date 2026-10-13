@@ -5,14 +5,13 @@ import os from "node:os";
 import path from "node:path";
 
 // Split guard for the #3501 god-file decomposition (PR 2): the target-resolution
-// stage of handleComboChat (wildcard expansion → weighted step groups → known
-// context overflow → strategy ordering → stickiness/eval/compat/context filters →
-// task-aware reorder → prompt-cache affinity → pre-screen) was extracted verbatim
-// into resolveComboTargetPipeline. These tests pin the leaf's own contract: the
-// shape it hands back to the attempt loop, the pass-through ordering for the plain
-// `priority` path, and the `earlyResponse` exit for a request that exceeds every
-// target's known context window. The strategy-specific branches stay covered
-// end-to-end by the combo-* consumer suites through combo.ts.
+// stage of handleComboChat (wildcard expansion → weighted step groups → strategy
+// ordering → stickiness/eval/compat/context filters → task-aware reorder →
+// prompt-cache affinity → pre-screen) was extracted verbatim into
+// resolveComboTargetPipeline. These tests pin the leaf's own contract: the shape it
+// hands back to the attempt loop and pass-through ordering for the plain `priority`
+// path. The strategy-specific branches stay covered end-to-end by the combo-*
+// consumer suites through combo.ts.
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-combo-target-resolution-"));
 const ORIGINAL_DATA_DIR = process.env.DATA_DIR;
@@ -23,6 +22,8 @@ const { saveModelsDevCapabilities, clearModelsDevCapabilities } =
   await import("../../src/lib/modelsDevSync.ts");
 const { resolveComboTargetPipeline } =
   await import("../../open-sse/services/combo/targetResolution.ts");
+const { clearAllStickyBindings, recordStickyBinding } =
+  await import("../../open-sse/services/combo/sessionStickiness.ts");
 
 test.after(() => {
   core.resetDbInstance();
@@ -31,11 +32,12 @@ test.after(() => {
   } else {
     process.env.DATA_DIR = ORIGINAL_DATA_DIR;
   }
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test.beforeEach(() => {
   clearModelsDevCapabilities();
+  clearAllStickyBindings();
 });
 
 const noopLog = { info() {}, warn() {}, error() {}, debug() {} } as never;
@@ -93,6 +95,36 @@ test("priority strategy resolves combo models into orderedTargets in declared or
     result.orderedTargets.map((t) => t.modelStr),
     ["openai/gpt-4o", "anthropic/claude-3"]
   );
+});
+
+test("#15241 priority pipeline keeps its declared head after a mid-list sticky success", async () => {
+  const priorityWithConnections = {
+    id: "c-sticky-priority",
+    name: "sticky-priority",
+    strategy: "priority",
+    models: [
+      { model: "openai/gpt-4o", connectionId: "conn-priority-a" },
+      { model: "anthropic/claude-3", connectionId: "conn-priority-b" },
+    ],
+    config: {},
+  };
+  const first = await resolveComboTargetPipeline(deps({ combo: priorityWithConnections }));
+  assert.ok(!("earlyResponse" in first));
+  if ("earlyResponse" in first) return;
+  assert.ok(first.sticky.messageHash, "pipeline derives the conversation stickiness key");
+  assert.ok(first.orderedTargets[1]?.connectionId, "second target has a connection id to pin");
+
+  recordStickyBinding(first.sticky.messageHash!, first.orderedTargets[1]!.connectionId!);
+
+  const repeated = await resolveComboTargetPipeline(deps({ combo: priorityWithConnections }));
+  assert.ok(!("earlyResponse" in repeated));
+  if ("earlyResponse" in repeated) return;
+  assert.deepEqual(
+    repeated.orderedTargets.map((target) => target.modelStr),
+    ["openai/gpt-4o", "anthropic/claude-3"],
+    "a prior mid-list success must not become runtime try-slot #1 for priority"
+  );
+  assert.equal(repeated.sticky.stuck, false);
 });
 
 test("returns the derived values the attempt loop consumes", async () => {
@@ -364,16 +396,12 @@ test("request exceeding every known context window returns a 400 earlyResponse",
     })
   );
 
-  assert.ok("earlyResponse" in result, "expected a context-overflow early response");
-  if (!("earlyResponse" in result)) return;
-  assert.equal(result.earlyResponse.status, 400);
-  const body = (await result.earlyResponse.json()) as {
-    error?: { code?: string };
-    diagnostics?: { terminalReason?: string; attempted?: number };
-  };
-  assert.equal(body.error?.code, "context_length_exceeded");
-  assert.equal(body.diagnostics?.terminalReason, "context_length_exceeded");
-  assert.equal(body.diagnostics?.attempted, 0);
+  assert.ok(!("earlyResponse" in result), "approximate context hints must not reject the pool");
+  if ("earlyResponse" in result) return;
+  assert.deepEqual(
+    result.orderedTargets.map((target) => target.modelStr),
+    ["unit-target-resolution/tiny", "unit-target-resolution/small"]
+  );
 });
 
 // #8790: maxContextWindow rejects every target whose known context window

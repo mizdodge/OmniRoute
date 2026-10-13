@@ -1,15 +1,39 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { normalizeCodexSessionId } from "./codexClient.ts";
+import { isCrossAccountCodexTurnState, readCodexTurnStateHeader } from "./codexTurnState.ts";
 
 const CODEX_INSTALLATION_SALT = "omniroute-codex-installation";
 const CODEX_SESSION_SEED_PREFIX = "omniroute:codex-session-id:v1:";
 const CODEX_THREAD_SEED_PREFIX = "omniroute:codex-thread-id:v1:";
+// v2 derivations are keyed by the persisted per-connection random seed
+// (codexFingerprintSeed) instead of the connection-id chain, mirroring
+// sub2api v0.1.178 (#5696): deterministic derivation stays stable, but the
+// seed is generated per connection so identities never collide across
+// deployments and survive connection export/import.
+const CODEX_INSTALLATION_SEED_PREFIX_V2 = "omniroute:codex-installation:v2:";
+const CODEX_SESSION_SEED_PREFIX_V2 = "omniroute:codex-session-id:v2:";
+const CODEX_THREAD_SEED_PREFIX_V2 = "omniroute:codex-thread-id:v2:";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const CODEX_FINGERPRINT_MODES = ["off", "device", "session", "full"] as const;
 export type CodexFingerprintMode = (typeof CODEX_FINGERPRINT_MODES)[number];
 export const CODEX_FINGERPRINT_MODE_KEY = "codexFingerprintMode";
+/**
+ * Opt-in scope of the outbound `prompt_cache_key` under session-mode convergence.
+ * `client` (default) forwards the client's key unchanged. `thread` replaces a key that is
+ * provably the client's session id with the converged thread id, so the cache key matches
+ * the thread id (as a real Codex client sends them) and stays per account.
+ */
+export const CODEX_PROMPT_CACHE_KEY_SCOPES = ["client", "thread"] as const;
+export type CodexPromptCacheKeyScope = (typeof CODEX_PROMPT_CACHE_KEY_SCOPES)[number];
+export const CODEX_PROMPT_CACHE_KEY_SCOPE_KEY = "codexPromptCacheKeyScope";
+/**
+ * System-managed per-connection random seed used as the fingerprint
+ * derivation source. Never sent upstream, stripped from API responses, and
+ * preserved across connection updates (sub2api `codex_fingerprint_seed`).
+ */
+export const CODEX_FINGERPRINT_SEED_KEY = "codexFingerprintSeed";
 
 export type CodexClientIdentity = {
   mode: CodexFingerprintMode;
@@ -19,12 +43,20 @@ export type CodexClientIdentity = {
   turnId: string;
   windowId: string;
   turnStartedAtUnixMs: number;
+  /**
+   * True when the inbound request already carried a Codex client identity
+   * header. Only then may the session-scoped carriers be converged/rewritten;
+   * synthesizing them for a client that presented none makes the request look
+   * unlike any real Codex client (see mergeTurnMetadata).
+   */
+  clientPresentedIdentity: boolean;
 };
 
 type CodexIdentityOptions = {
   mode?: CodexFingerprintMode;
   accountKey?: string | null;
   isOAuth?: boolean;
+  clientPresentedIdentity?: boolean;
 };
 
 function normalizeUuid(value: unknown): string | null {
@@ -72,6 +104,61 @@ function accountSeed(
   );
 }
 
+/** The persisted system-managed random seed, when present and a valid UUID. */
+export function getCodexFingerprintSeed(
+  providerSpecificData?: Record<string, unknown> | null
+): string | null {
+  return normalizeUuid(providerSpecificData?.[CODEX_FINGERPRINT_SEED_KEY]);
+}
+
+/** Modes that rewrite account-scoped identifiers and therefore need a stable seed. */
+export function codexFingerprintModeRequiresSeed(mode: CodexFingerprintMode): boolean {
+  return mode === "device" || mode === "session" || mode === "full";
+}
+
+/**
+ * Ensure a Codex OAuth connection carries a persisted fingerprint seed when its
+ * convergence mode derives account-scoped identifiers. Called at connection
+ * create/update time (the persistence layer owns the write); the request path
+ * only ever READS the seed, so an identity never rotates mid-flight.
+ *
+ * Semantics mirror sub2api v0.1.178 `prepareCodexFingerprintExtraFor{Create,Update}`:
+ * - the key is system-managed: any client-supplied value is stripped first;
+ * - an existing valid seed is ALWAYS carried forward (even when the new mode
+ *   is `off` — it stays dormant, ready if convergence is re-enabled later);
+ * - otherwise a fresh seed is created only when the mode requires one
+ *   (device/session/full; the OmniRoute default is session).
+ *
+ * Returns the (possibly new) providerSpecificData, or undefined when there is
+ * nothing to store. Pre-seed connections keep their legacy connection-id
+ * derived identity until the next save — one deliberate rotation, same as
+ * sub2api's migration-225 backfill.
+ */
+export function ensureCodexFingerprintSeed(
+  providerSpecificData?: Record<string, unknown> | null,
+  credentials?: { accessToken?: unknown; refreshToken?: unknown } | null,
+  existingProviderSpecificData?: Record<string, unknown> | null
+): Record<string, unknown> | undefined {
+  const psd: Record<string, unknown> = { ...(providerSpecificData || {}) };
+  // System-managed key: never trust an inbound value, regardless of auth type.
+  delete psd[CODEX_FINGERPRINT_SEED_KEY];
+  if (!isCodexOAuthCredentials(credentials)) {
+    return Object.keys(psd).length > 0 ? psd : undefined;
+  }
+
+  const existingSeed = getCodexFingerprintSeed(existingProviderSpecificData);
+  if (existingSeed) {
+    psd[CODEX_FINGERPRINT_SEED_KEY] = existingSeed;
+    return psd;
+  }
+  const mode = getCodexFingerprintMode(psd, true);
+  if (codexFingerprintModeRequiresSeed(mode)) {
+    psd[CODEX_FINGERPRINT_SEED_KEY] = randomUUID();
+    return psd;
+  }
+  return Object.keys(psd).length > 0 ? psd : undefined;
+}
+
 function readNamedHeader(
   headers: Headers | Record<string, unknown> | null | undefined,
   name: string
@@ -113,12 +200,49 @@ export function getCodexFingerprintMode(
     : "session";
 }
 
+export function getCodexPromptCacheKeyScope(
+  providerSpecificData?: Record<string, unknown> | null
+): CodexPromptCacheKeyScope {
+  const raw = (
+    nonEmptyString(providerSpecificData?.[CODEX_PROMPT_CACHE_KEY_SCOPE_KEY]) || ""
+  ).toLowerCase();
+  return (CODEX_PROMPT_CACHE_KEY_SCOPES as readonly string[]).includes(raw)
+    ? (raw as CodexPromptCacheKeyScope)
+    : "client";
+}
+
+/**
+ * The thread-scoped outbound `prompt_cache_key`, or null to leave the body unchanged.
+ * Only acts under the opt-in `thread` scope with session-mode convergence, and only when
+ * the key derives the very thread id already chosen for this account — i.e. it is the
+ * client's own session id, not a key the caller picked. The thread id is per
+ * (account, client session), so caching stays per conversation within an account.
+ */
+export function resolveCodexThreadScopedPromptCacheKey(
+  promptCacheKey: unknown,
+  identity: CodexClientIdentity | null | undefined,
+  providerSpecificData?: Record<string, unknown> | null,
+  accountKey?: string | null
+): string | null {
+  if (getCodexPromptCacheKeyScope(providerSpecificData) !== "thread") return null;
+  if (!identity || identity.mode !== "session" || !identity.threadId) return null;
+  const clientKey = normalizeCodexSessionId(promptCacheKey);
+  if (!clientKey || clientKey === identity.threadId) return null;
+  const derived = getCodexConvergedThreadId(clientKey, providerSpecificData, accountKey);
+  return derived === identity.threadId ? identity.threadId : null;
+}
+
 export function getCodexInstallationId(
   providerSpecificData?: Record<string, unknown> | null,
   accountKey?: string | null
 ): string {
   const explicit = normalizeUuid(providerSpecificData?.codexInstallationId);
   if (explicit) return explicit;
+
+  const persistedSeed = getCodexFingerprintSeed(providerSpecificData);
+  if (persistedSeed) {
+    return deriveStableUUIDv4(`${CODEX_INSTALLATION_SEED_PREFIX_V2}${persistedSeed}`);
+  }
 
   const legacyStableSource =
     nonEmptyString(providerSpecificData?.workspaceId) ||
@@ -137,6 +261,10 @@ export function getCodexConvergedSessionId(
   providerSpecificData?: Record<string, unknown> | null,
   accountKey?: string | null
 ): string {
+  const persistedSeed = getCodexFingerprintSeed(providerSpecificData);
+  if (persistedSeed) {
+    return deriveStableUUIDv4(`${CODEX_SESSION_SEED_PREFIX_V2}${persistedSeed}`);
+  }
   return deriveStableUUIDv4(
     `${CODEX_SESSION_SEED_PREFIX}${accountSeed(providerSpecificData, accountKey)}`
   );
@@ -148,6 +276,10 @@ export function getCodexConvergedThreadId(
   accountKey?: string | null
 ): string {
   if (!nonEmptyString(clientSessionId)) return "";
+  const persistedSeed = getCodexFingerprintSeed(providerSpecificData);
+  if (persistedSeed) {
+    return deriveStableUUIDv4(`${CODEX_THREAD_SEED_PREFIX_V2}${persistedSeed}:${clientSessionId}`);
+  }
   return deriveStableUUIDv4(
     `${CODEX_THREAD_SEED_PREFIX}${accountSeed(providerSpecificData, accountKey)}:${clientSessionId}`
   );
@@ -164,6 +296,26 @@ export function getCodexClientSessionId(
 }
 
 /**
+ * Decide what to do with the client's `x-codex-turn-state` echo for the
+ * account about to serve this request. The blob is minted per account by the
+ * upstream; replaying another account's blob after failover is a proxy-only
+ * contradiction, so a known cross-account echo is stripped. Same-account or
+ * unknown provenance passes through unchanged (strip only, never inject).
+ * Independent of the fingerprint-convergence mode — account consistency also
+ * applies to explicit `off` / passthrough.
+ */
+export function resolveCodexTurnStateEcho(
+  clientHeaders?: Headers | Record<string, unknown> | null,
+  accountKey?: string | null
+): string | null {
+  const value = readCodexTurnStateHeader(clientHeaders);
+  if (!value) return null;
+  const sessionId = getCodexClientSessionId(clientHeaders);
+  if (sessionId && isCrossAccountCodexTurnState(sessionId, accountKey)) return null;
+  return value;
+}
+
+/**
  * One identity object for every carrier in one upstream turn.
  * accountKey may be the OmniRoute connection id; it is never sent upstream.
  */
@@ -177,6 +329,7 @@ export function createCodexClientIdentity(
   if (mode === "off") return null;
 
   const installationId = getCodexInstallationId(providerSpecificData, options.accountKey);
+  const clientPresentedIdentity = options.clientPresentedIdentity ?? true;
   if (mode === "device") {
     return {
       mode,
@@ -186,6 +339,7 @@ export function createCodexClientIdentity(
       turnId: "",
       windowId: "",
       turnStartedAtUnixMs: Date.now(),
+      clientPresentedIdentity,
     };
   }
 
@@ -204,6 +358,7 @@ export function createCodexClientIdentity(
     turnId: randomUUID(),
     windowId: `${threadId}:0`,
     turnStartedAtUnixMs: Date.now(),
+    clientPresentedIdentity,
   };
 }
 
@@ -273,7 +428,38 @@ export function resolveCodexFingerprintIdentity(input: {
     {
       accountKey: credentials.connectionId ?? null,
       isOAuth,
+      clientPresentedIdentity:
+        hasCodexIdentityHeaders(input.clientHeaders) || getClientBodySessionId(input.body) !== null,
     }
+  );
+}
+
+/**
+ * True when the inbound request already carries a Codex client identity header.
+ * A genuine Codex client always presents at least one; generic OpenAI-compatible
+ * clients do not. Used to gate session-scoped identity convergence so OmniRoute
+ * never fabricates a session envelope a real client would not produce.
+ */
+export function hasCodexIdentityHeaders(
+  headers?: Headers | Record<string, unknown> | null
+): boolean {
+  return CODEX_IDENTITY_HEADER_NAMES.some((name) => readNamedHeader(headers, name) !== "");
+}
+
+/**
+ * A client may present its Codex session through the request BODY
+ * (`prompt_cache_key` / `session_id` / `conversation_id`) without sending any
+ * identity header. That still counts as a presented identity, so convergence
+ * keeps headers and body metadata consistent.
+ */
+function getClientBodySessionId(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  return (
+    normalizeCodexSessionId(record.prompt_cache_key) ||
+    normalizeCodexSessionId(record.session_id) ||
+    normalizeCodexSessionId(record.conversation_id) ||
+    null
   );
 }
 
@@ -284,13 +470,19 @@ export function withCodexFingerprintCredentials<T extends CodexCredentialIdentit
 ): T {
   const identity = resolveCodexFingerprintIdentity({ credentials, clientHeaders, body });
   const original = resolveCodexOriginalIdentityHeaders({ credentials, clientHeaders });
-  if (!identity && !original) return credentials;
+  // The turn-state echo guard runs for every Codex request (including compact
+  // and explicit-off), unlike the convergence identity above.
+  const turnStateEcho = credentials
+    ? resolveCodexTurnStateEcho(clientHeaders, credentials.connectionId ?? null)
+    : null;
+  if (!identity && !original && !turnStateEcho) return credentials;
   return {
     ...credentials,
     providerSpecificData: {
       ...(credentials.providerSpecificData || {}),
       ...(identity ? { codexClientIdentity: identity } : {}),
       ...(original ? { codexOriginalIdentityHeaders: original } : {}),
+      ...(turnStateEcho ? { codexTurnStateEcho: turnStateEcho } : {}),
     },
   };
 }
@@ -301,24 +493,23 @@ function mergeTurnMetadata(
   includeSessionFields: boolean
 ): string {
   let metadata: Record<string, unknown> = {};
-  let hadExisting = false;
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         metadata = parsed as Record<string, unknown>;
-        hadExisting = true;
       }
     } catch {
       // Keep non-JSON metadata only when we do not need a complete carrier.
     }
   }
 
-  if (!hadExisting && includeSessionFields) {
-    metadata.thread_source = "user";
-    metadata.sandbox = "none";
-  }
-
+  // Never FABRICATE envelope fields. The old code injected
+  // `thread_source:"user"` + `sandbox:"none"` whenever the client sent no turn
+  // metadata; no real Codex client emits that shape, and the ChatGPT backend
+  // rejects tool-bearing turns on the newest models with "blocked by our safety
+  // systems. Reason: Potentially unintended activity." Callers therefore only
+  // converge identity the client actually presented (clientPresentedIdentity).
   metadata.installation_id = identity.installationId;
   if (includeSessionFields) {
     metadata.session_id = identity.sessionId;
@@ -348,7 +539,14 @@ export function applyCodexClientIdentityHeaders(
   if (!identity) return;
 
   headers["x-codex-installation-id"] = identity.installationId;
-  if (identity.mode === "device") {
+
+  // Converge the session-scoped carriers ONLY for requests that already carry a
+  // Codex client identity. Synthesizing a session/thread/turn envelope for a
+  // client that never presented one (OpenAI-compatible SDKs, non-Codex
+  // harnesses) makes the request look unlike any real Codex client, and the
+  // ChatGPT backend rejects tool-bearing turns on the newest models with
+  // "Potentially unintended activity". Device-level identity above still applies.
+  if (identity.mode === "device" || !identity.clientPresentedIdentity) {
     if (headers["x-codex-turn-metadata"] !== undefined) {
       headers["x-codex-turn-metadata"] = mergeTurnMetadata(
         headers["x-codex-turn-metadata"],
@@ -385,7 +583,10 @@ export function applyCodexClientMetadata(
       : {};
   existing["x-codex-installation-id"] = identity.installationId;
 
-  if (identity.mode !== "device") {
+  // Same rule as applyCodexClientIdentityHeaders: converge the session-scoped
+  // identity only when the client presented one.
+  const convergeSession = identity.mode !== "device" && identity.clientPresentedIdentity;
+  if (convergeSession) {
     existing.session_id = identity.sessionId;
     existing.thread_id = identity.threadId || identity.sessionId;
     existing.turn_id = identity.turnId;
@@ -396,7 +597,7 @@ export function applyCodexClientMetadata(
     existing["x-codex-turn-metadata"] = mergeTurnMetadata(
       existing["x-codex-turn-metadata"],
       identity,
-      identity.mode !== "device"
+      convergeSession
     );
   }
 
@@ -460,4 +661,38 @@ export function isVerifiedNativeCodexRequest(
   headers: Headers | Record<string, unknown> | null | undefined
 ): boolean {
   return isCodexOriginatedHeaders(headers) && hasNativeCodexTurnBinding(body);
+}
+
+/**
+ * Detect the Claude Code CLI as the request *client* from request headers.
+ * Used to auto-enable model echo so session restores work when the resolved
+ * upstream model (e.g. `oc/nemotron-3-ultra-free`) is not recognized by the
+ * Claude Code client on `--resume`.
+ */
+export function isClaudeCodeOriginatedHeaders(
+  headers: Headers | Record<string, unknown> | null | undefined
+): boolean {
+  const getHeader = (name: string): string => {
+    if (headers instanceof Headers) {
+      return headers.get(name)?.toLowerCase() ?? "";
+    }
+    if (headers && typeof headers === "object") {
+      for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+        if (key.toLowerCase() === name && typeof value === "string") {
+          return value.toLowerCase();
+        }
+      }
+    }
+    return "";
+  };
+
+  // Claude Code identifies itself via the user-agent header
+  const userAgent = getHeader("user-agent");
+  if (userAgent.includes("claude-code") || userAgent.includes("anthropic-ai/claude-code")) {
+    return true;
+  }
+  // Also check originator if present
+  const originator = getHeader("originator");
+  if (originator.startsWith("claude-code")) return true;
+  return false;
 }

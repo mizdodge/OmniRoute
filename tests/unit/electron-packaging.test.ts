@@ -7,7 +7,29 @@ import { pruneElectronRuntimeDocs } from "../../scripts/build/electronRuntimeDoc
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
-test("electron build copies the standalone runtime into resources/app exactly once", () => {
+// The SECOND entry looks like a redundant duplicate of the first — it is not, and
+// removing it ships a desktop app that cannot boot.
+//
+// electron-builder's file matcher hard-codes an exclusion of the source root's
+// `node_modules` directory for extraResources/extraFiles, BEFORE any `filter`
+// pattern is consulted (app-builder-lib/out/util/filter.js: `if (relative ===
+// "node_modules") return false`). So `{ from: ".build/electron-standalone", to:
+// "app", filter: ["**/*"] }` copies server.js, server-ws.mjs and every NESTED
+// node_modules, but silently drops `.build/electron-standalone/node_modules` —
+// the tree that holds `next`, `better-sqlite3` and the whole server closure.
+//
+// Pointing a second matcher AT the node_modules directory sidesteps the check
+// (its relative paths never equal "node_modules") and is the only way to get that
+// tree into `resources/app/node_modules`, which main.js also puts on the server's
+// NODE_PATH.
+//
+// Regression history: #10325 "de-duplicated" the two entries into one on
+// 2026-08-16; the packaged app then died on `Cannot find module 'next'` at
+// resources/app/server.js. It went unnoticed for nine days because the Electron
+// Package Smoke was already red on an earlier defect (lib/loginHeaderCapture.js
+// missing from build.files since #9984), so the main process never got far enough
+// to spawn the server.
+test("electron build copies the standalone runtime AND its root node_modules into resources/app", () => {
   const electronPackage = JSON.parse(readFileSync(join(ROOT, "electron", "package.json"), "utf8"));
 
   const extraResources = electronPackage.build?.extraResources;
@@ -21,6 +43,11 @@ test("electron build copies the standalone runtime into resources/app exactly on
     {
       from: "../.build/electron-standalone",
       to: "app",
+      filter: ["**/*", "node_modules/**/*"],
+    },
+    {
+      from: "../.build/electron-standalone/node_modules",
+      to: "app/node_modules",
       filter: ["**/*"],
     },
   ]);
@@ -46,6 +73,8 @@ test("electron docs manifest prunes authoring payloads without removing runtime 
     ["docs/guides/CODEX-CLI-CONFIGURATION.md", "# Codex CLI"],
     ["docs/i18n/ko/docs/guides/ELECTRON_GUIDE.md", "# Electron"],
     ["docs/i18n/ko/CHANGELOG.md", "translated release history"],
+    ["docs/i18n/ko/README.md", "translated readme"],
+    ["docs/i18n/ko/llm.txt", "translated llm summary"],
     ["docs/i18n/fr/CHANGELOG.md", "historique traduit"],
     ["docs/research/desktop-notes.md", "authoring notes"],
     ["docs/superpowers/plans/desktop-plan.md", "implementation plan"],
@@ -60,16 +89,23 @@ test("electron docs manifest prunes authoring payloads without removing runtime 
 
     const result = pruneElectronRuntimeDocs(bundleRoot);
 
+    // Only `docs/i18n/<locale>/docs/**` is read at runtime (the in-app docs
+    // route, see src/lib/docsI18nPath.ts); every root-level mirror of a locale
+    // is authoring material and leaves the bundle with the CHANGELOG.
     assert.deepEqual(result.removedPaths, [
       "docs/i18n/fr/CHANGELOG.md",
       "docs/i18n/ko/CHANGELOG.md",
+      "docs/i18n/ko/README.md",
+      "docs/i18n/ko/llm.txt",
       "docs/research",
       "docs/superpowers",
     ]);
-    assert.equal(result.removedFiles, 4);
+    assert.equal(result.removedFiles, 6);
     assert.equal(
       result.removedBytes,
       Buffer.byteLength("translated release history") +
+        Buffer.byteLength("translated readme") +
+        Buffer.byteLength("translated llm summary") +
         Buffer.byteLength("historique traduit") +
         Buffer.byteLength("authoring notes") +
         Buffer.byteLength("implementation plan")
@@ -79,6 +115,8 @@ test("electron docs manifest prunes authoring payloads without removing runtime 
     assert.equal(existsSync(join(bundleRoot, "docs/guides/CODEX-CLI-CONFIGURATION.md")), true);
     assert.equal(existsSync(join(bundleRoot, "docs/i18n/ko/docs/guides/ELECTRON_GUIDE.md")), true);
     assert.equal(existsSync(join(bundleRoot, "docs/i18n/ko/CHANGELOG.md")), false);
+    assert.equal(existsSync(join(bundleRoot, "docs/i18n/ko/README.md")), false);
+    assert.equal(existsSync(join(bundleRoot, "docs/i18n/ko/llm.txt")), false);
     assert.equal(existsSync(join(bundleRoot, "docs/research")), false);
     assert.equal(existsSync(join(bundleRoot, "docs/superpowers")), false);
 
@@ -88,7 +126,7 @@ test("electron docs manifest prunes authoring payloads without removing runtime 
       removedPaths: [],
     });
   } finally {
-    rmSync(bundleRoot, { recursive: true, force: true });
+    rmSync(bundleRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

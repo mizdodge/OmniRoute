@@ -32,9 +32,17 @@ describe("ModalityBridgeVisionTab", () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      // The Vision picker now reads the unified catalog (modelSource="catalog",
+      // #10809), which returns `{ catalog: { provider: { models: [...] } } }`.
       if (url.includes("/api/models")) {
         return new Response(
-          JSON.stringify({ models: [{ provider: "openai", model: "gpt-4o-mini" }] }),
+          JSON.stringify({
+            catalog: {
+              openai: {
+                models: [{ id: "gpt-4o-mini", capabilities: { vision: true } }],
+              },
+            },
+          }),
           { status: 200 }
         );
       }
@@ -249,5 +257,92 @@ describe("ModalityBridgeVisionTab", () => {
       "prompt-injection",
       "credential-masker",
     ]);
+  });
+
+  it("#10703: filters the model dropdown to vision-capable models only", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/models")) {
+        return new Response(
+          JSON.stringify({
+            catalog: {
+              openai: {
+                models: [
+                  { id: "gpt-4o-mini", capabilities: { vision: true } },
+                  { id: "gpt-4o", capabilities: { vision: true } },
+                ],
+              },
+              cmd: {
+                models: [
+                  { id: "gpt-5.3-codex", capabilities: { vision: false } },
+                  { id: "deepseek/deepseek-v4-pro", input_modalities: ["text"] },
+                ],
+              },
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/api/settings")) {
+        if (init?.method === "PATCH") return new Response("{}", { status: 200 });
+        return new Response(
+          JSON.stringify({ visionBridgeModel: "openai/gpt-4o-mini", visionBridgeEnabled: true }),
+          { status: 200 }
+        );
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    const el = await render();
+    await waitFor(
+      () => el.querySelector('[data-testid="modality-bridge-vision-model-custom-input"]') !== null,
+      "vision model picker to load"
+    );
+
+    // The filtered <select> must list vision-capable models only (empty placeholder excluded).
+    const modelLabel = Array.from(el.querySelectorAll("label")).find((label) =>
+      label.textContent?.includes("modalityBridgeVisionModel")
+    );
+    const modelSelect =
+      (modelLabel?.parentElement?.querySelector("select") as HTMLSelectElement | null) ?? null;
+    const optionValues = Array.from(modelSelect?.options ?? [])
+      .map((o) => o.value)
+      .filter(Boolean);
+    expect(optionValues).toContain("openai/gpt-4o-mini");
+    expect(optionValues).toContain("openai/gpt-4o");
+    expect(optionValues).not.toContain("cmd/gpt-5.3-codex");
+    expect(optionValues).not.toContain("cmd/deepseek/deepseek-v4-pro");
+  });
+
+  it("#10703: the custom model input lets operators type an unlisted vision model", async () => {
+    const el = await render();
+    await waitFor(
+      () => el.querySelector('[data-testid="modality-bridge-vision-model-custom-input"]') !== null,
+      "vision model picker to load"
+    );
+
+    const input = el.querySelector(
+      '[data-testid="modality-bridge-vision-model-custom-input"]'
+    ) as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(input, "ollama/llava:13b");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    await waitFor(
+      () =>
+        fetchMock.mock.calls.some(([, init]) => {
+          if ((init as RequestInit | undefined)?.method !== "PATCH") return false;
+          const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+          return body.modalityBridgeVisionModel === "ollama/llava:13b";
+        }),
+      "custom vision model PATCH"
+    );
   });
 });

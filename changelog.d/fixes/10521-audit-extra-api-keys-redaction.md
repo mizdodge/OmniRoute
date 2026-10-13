@@ -1,1 +1,0 @@
-- **fix(compliance):** redact additional provider API keys from audit-log payloads ([#10521](https://github.com/diegosouzapw/OmniRoute/pull/10521)) — thanks @Zartharas

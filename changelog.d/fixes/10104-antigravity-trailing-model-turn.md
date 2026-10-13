@@ -1,1 +1,0 @@
-- fix(antigravity): strip trailing model turn for native Gemini requests too, not just Claude (#10104)

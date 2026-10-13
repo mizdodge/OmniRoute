@@ -7,6 +7,8 @@ import {
   markSuccess,
   maskAccountId,
   isNetworkErrorRotatable,
+  isEmptyUpstreamRejection,
+  extractChatcmplId,
   type RotatableAccount,
 } from "../../open-sse/executors/accountRotation.ts";
 
@@ -112,5 +114,102 @@ describe("accountRotation", () => {
     const withoutProxy = account({ proxy: null });
     assert.strictEqual(isNetworkErrorRotatable(withProxy), true);
     assert.strictEqual(isNetworkErrorRotatable(withoutProxy), false);
+  });
+});
+
+describe("isEmptyUpstreamRejection", () => {
+  it("matches the observed malformed completion envelope (no error field, empty content, null finish_reason)", () => {
+    const observed =
+      '{"id":"chatcmpl_44fn2g6e7kk","object":"chat.completion","created":1787419957,"model":"muse-spark-1.2-contributor-free","choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}';
+    assert.strictEqual(isEmptyUpstreamRejection(400, observed), true);
+  });
+
+  it("does not match a non-400 status", () => {
+    const observed =
+      '{"id":"chatcmpl_44fn2g6e7kk","object":"chat.completion","created":1787419957,"model":"muse-spark-1.2-contributor-free","choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}';
+    assert.strictEqual(isEmptyUpstreamRejection(200, observed), false);
+    assert.strictEqual(isEmptyUpstreamRejection(429, observed), false);
+    assert.strictEqual(isEmptyUpstreamRejection(502, observed), false);
+  });
+
+  it("does not match when an error field is present", () => {
+    const withError = JSON.stringify({
+      error: { message: "bad request", type: "invalid_request_error" },
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, withError), false);
+    const emptyError = JSON.stringify({ error: {} });
+    assert.strictEqual(isEmptyUpstreamRejection(400, emptyError), false);
+  });
+
+  it("does not match when content is non-empty or tool_calls present", () => {
+    const nonEmpty = JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, nonEmpty), false);
+
+    const toolCalls = JSON.stringify({
+      choices: [
+        { message: { role: "assistant", tool_calls: [{ id: "x" }] }, finish_reason: "tool_calls" },
+      ],
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, toolCalls), false);
+  });
+
+  it("does not match when content is a non-string non-null value (number, block array)", () => {
+    const numericContent = JSON.stringify({
+      choices: [{ message: { role: "assistant", content: 123 }, finish_reason: null }],
+    });
+    assert.strictEqual(
+      isEmptyUpstreamRejection(400, numericContent),
+      false,
+      "non-string non-null content is not eligible"
+    );
+
+    const reasoningContent = JSON.stringify({
+      choices: [
+        { message: { role: "assistant", reasoning_content: "thinking" }, finish_reason: null },
+      ],
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, reasoningContent), false);
+  });
+
+  it("does not match when choices or message are absent", () => {
+    const noChoices = JSON.stringify({ id: "chatcmpl_x", model: "muse" });
+    assert.strictEqual(isEmptyUpstreamRejection(400, noChoices), false);
+    const noMessage = JSON.stringify({ choices: [{ finish_reason: null }] });
+    assert.strictEqual(isEmptyUpstreamRejection(400, noMessage), false);
+  });
+
+  it("does not match when finish_reason is a literal value (not null)", () => {
+    const stopReason = JSON.stringify({
+      choices: [{ message: { role: "assistant" }, finish_reason: "stop" }],
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, stopReason), false);
+  });
+
+  it("matches an empty string content (treated as eligible)", () => {
+    const emptyContent = JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "" }, finish_reason: null }],
+    });
+    assert.strictEqual(isEmptyUpstreamRejection(400, emptyContent), true);
+  });
+
+  it("returns false for unparseable JSON rather than throwing", () => {
+    assert.strictEqual(isEmptyUpstreamRejection(400, "not json"), false);
+    assert.strictEqual(isEmptyUpstreamRejection(400, ""), false);
+  });
+});
+
+describe("extractChatcmplId", () => {
+  it("extracts the chatcmpl id from an observed envelope", () => {
+    const observed =
+      '{"id":"chatcmpl_44fn2g6e7kk","object":"chat.completion","created":1787419957,"model":"muse-spark-1.2-contributor-free","choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}';
+    assert.strictEqual(extractChatcmplId(observed), "chatcmpl_44fn2g6e7kk");
+  });
+
+  it("falls back to 'unknown' when no id is present", () => {
+    assert.strictEqual(extractChatcmplId("{choices:[]}"), "unknown");
+    assert.strictEqual(extractChatcmplId(""), "unknown");
+    assert.strictEqual(extractChatcmplId("not json"), "unknown");
   });
 });

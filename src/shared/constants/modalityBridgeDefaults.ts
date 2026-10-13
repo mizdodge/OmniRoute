@@ -8,6 +8,7 @@
 import { VISION_BRIDGE_DEFAULTS } from "./visionBridgeDefaults";
 
 export type VisionBridgeMode = "auto" | "describe" | "reroute";
+export type VideoAnalysisMode = "full" | "focused";
 export type VideoSamplingPolicy = "uniform" | "scene_aware" | "segment_aware";
 
 export const VIDEO_BRIDGE_TIMEOUT_MIN_MS = 1_000;
@@ -27,10 +28,17 @@ export const MODALITY_BRIDGE_DEFAULTS = {
   audioMaxClips: 3,
   videoEnabled: false,
   videoModel: "",
+  videoAnalysisMode: "full" as VideoAnalysisMode,
   videoFrameCount: 8,
   videoSamplingPolicy: "uniform" as VideoSamplingPolicy,
   videoMaxVideos: 1,
   videoTimeoutMs: 120000,
+  // Server-orchestrated Audio Bridge STT over Video Bridge audio extraction
+  // (FU-06, #11654) spends provider credit on the operator's behalf, so it
+  // stays OFF by default — Hard Rule #20's "never spend by default" spirit.
+  // Every transcription attempt additionally requires a per-request opt-in;
+  // this flag alone never triggers a call.
+  videoAudioTranscriptionEnabled: false,
 } as const;
 
 export interface VisionBridgeRuntimeSettings {
@@ -57,9 +65,15 @@ export interface AudioBridgeRuntimeSettings {
   cacheMaxEntries: number;
 }
 
+export interface VideoAudioTranscriptionRuntimeSettings {
+  /** Operator opt-in only — a request still needs its own opt-in (FU-06, #11654). */
+  enabled: boolean;
+}
+
 export interface VideoBridgeRuntimeSettings {
   enabled: boolean;
   model: string;
+  analysisMode: VideoAnalysisMode;
   frameCount: number;
   samplingPolicy: VideoSamplingPolicy;
   maxVideos: number;
@@ -139,14 +153,33 @@ export function resolveAudioBridgeRuntimeSettings(
   };
 }
 
+/**
+ * Resolve the operator half of the FU-06 dual opt-in for Video Bridge audio
+ * transcription. The request-side opt-in is a separate, per-request signal —
+ * this settings flag alone never authorizes a transcription call.
+ */
+export function resolveVideoAudioTranscriptionRuntimeSettings(
+  settings: Record<string, unknown> | null | undefined
+): VideoAudioTranscriptionRuntimeSettings {
+  const s = settings ?? {};
+  return {
+    enabled:
+      pickBoolean(s.modalityBridgeVideoAudioTranscriptionEnabled) ??
+      MODALITY_BRIDGE_DEFAULTS.videoAudioTranscriptionEnabled,
+  };
+}
+
 /** Resolve persisted Video Bridge settings with safe, bounded defaults. */
 export function resolveVideoBridgeRuntimeSettings(
   settings: Record<string, unknown> | null | undefined
 ): VideoBridgeRuntimeSettings {
   const s = settings ?? {};
+  const analysisMode = pickString(s.modalityBridgeVideoAnalysisMode);
   return {
     enabled: pickBoolean(s.modalityBridgeVideoEnabled) ?? MODALITY_BRIDGE_DEFAULTS.videoEnabled,
     model: pickString(s.modalityBridgeVideoModel) ?? MODALITY_BRIDGE_DEFAULTS.videoModel,
+    analysisMode:
+      analysisMode === "focused" ? analysisMode : MODALITY_BRIDGE_DEFAULTS.videoAnalysisMode,
     frameCount:
       pickNumber(s.modalityBridgeVideoFrameCount) ?? MODALITY_BRIDGE_DEFAULTS.videoFrameCount,
     samplingPolicy:

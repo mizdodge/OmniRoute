@@ -1,5 +1,5 @@
 import { getPendingById } from "@/lib/usage/usageHistory";
-import { getChatLogMaxDepth } from "@/lib/logEnv";
+import { getChatLogMaxDepth, getChatLogArrayTailItems } from "@/lib/logEnv";
 import { sanitizeErrorMessage } from "./error.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -19,6 +19,7 @@ export type RequestPipelinePayloads = {
   providerResponse?: JsonRecord;
   clientResponse?: JsonRecord;
   error?: JsonRecord;
+  toolLoop?: { legs: JsonRecord[] };
   streamChunks?: {
     provider?: string[];
     openai?: string[];
@@ -28,7 +29,12 @@ export type RequestPipelinePayloads = {
 
 type RequestLogger = {
   sessionPath: null;
-  logClientRawRequest: (endpoint: unknown, body: unknown, headers?: HeaderInput) => void;
+  logClientRawRequest: (
+    endpoint: unknown,
+    body: unknown,
+    headers?: HeaderInput,
+    effectiveInput?: unknown
+  ) => void;
   logRouteDecision: (decision: unknown) => void;
   logOpenAIRequest: (body: unknown) => void;
   logTargetRequest: (url: unknown, headers: HeaderInput, body: unknown) => void;
@@ -38,11 +44,13 @@ type RequestLogger = {
     headers: HeaderInput,
     body: unknown
   ) => void;
+  logProviderDiagnostic: (diagnostic: JsonRecord | null) => void;
   appendProviderChunk: (chunk: string) => void;
   appendOpenAIChunk: (chunk: string) => void;
   logConvertedResponse: (body: unknown) => void;
   appendConvertedChunk: (chunk: string) => void;
   logError: (error: unknown, requestBody?: unknown) => void;
+  logToolLoopReceipt: (receipt: unknown) => void;
   getPipelinePayloads: () => RequestPipelinePayloads | null;
 };
 
@@ -60,8 +68,16 @@ type RequestLoggerOptions = {
 const DEFAULT_MAX_STREAM_CHUNK_BYTES = 128 * 1024;
 const DEFAULT_MAX_STREAM_CHUNK_ITEMS = 10_240;
 const MAX_LOG_STRING_LENGTH = 64 * 1024;
-export const MAX_LOG_ARRAY_ITEMS = 24;
+// Was its own separate hardcoded 24, independent of the sibling
+// cloneBoundedChatLogPayload (chatCore/logTruncation.ts) implementation's
+// configurable cap — the two duplicated the same "bound an array for
+// logging" policy with different, drifting limits. Sharing
+// getChatLogArrayTailItems() keeps both bounding passes over the same
+// artifact data consistent. Read once at module load, matching this file's
+// existing plain-constant shape; CHAT_LOG_ARRAY_TAIL_ITEMS still overrides it.
+export const MAX_LOG_ARRAY_ITEMS = getChatLogArrayTailItems();
 const MAX_LOG_OBJECT_KEYS = 80;
+const MAX_TOOL_LOOP_LEGS = 4;
 
 function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
   if (!headers) return {};
@@ -75,6 +91,7 @@ function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
   const sensitiveKeys = [
     "authorization",
     "x-api-key",
+    "apikey",
     "cookie",
     "token",
     "runtimekey",
@@ -94,7 +111,8 @@ function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
       masked[key] = "[REDACTED]";
       continue;
     }
-    if (!sensitiveKeys.some((candidate) => lowerKey.includes(candidate))) {
+    const compactedKey = lowerKey.replace(/-/g, "");
+    if (!sensitiveKeys.some((candidate) => compactedKey.includes(candidate.replace(/-/g, "")))) {
       continue;
     }
 
@@ -270,7 +288,16 @@ function compactPipelinePayloads(
       continue;
     }
 
-    result[key as keyof RequestPipelinePayloads] = value;
+    if (key === "toolLoop" && value && typeof value === "object") {
+      const legs = (value as { legs?: unknown }).legs;
+      if (Array.isArray(legs) && legs.length > 0) {
+        result.toolLoop = { legs: legs as JsonRecord[] };
+      }
+      continue;
+    }
+
+    const payloadKey = key as Exclude<keyof RequestPipelinePayloads, "streamChunks" | "toolLoop">;
+    result[payloadKey] = value as JsonRecord;
   }
 
   return hasOwnValues(result) ? result : null;
@@ -367,11 +394,13 @@ export async function createRequestLogger(
       logOpenAIRequest() {},
       logTargetRequest() {},
       logProviderResponse() {},
+      logProviderDiagnostic() {},
       appendProviderChunk: chunkMethods.appendProviderChunk,
       appendOpenAIChunk: chunkMethods.appendOpenAIChunk,
       logConvertedResponse() {},
       appendConvertedChunk: chunkMethods.appendConvertedChunk,
       logError() {},
+      logToolLoopReceipt() {},
       getPipelinePayloads() {
         return routeDecision ? { routeDecision } : null;
       },
@@ -385,12 +414,26 @@ export async function createRequestLogger(
   return {
     sessionPath: null,
 
-    logClientRawRequest(endpoint, body, headers = {}) {
+    logClientRawRequest(endpoint, body, headers = {}, effectiveInput) {
       payloads.clientRawRequest = {
         timestamp: new Date().toISOString(),
         endpoint,
         headers: maskSensitiveHeaders(headers),
         body: cloneBoundedForLog(body),
+        // The actual `input` this request dispatched with, captured AFTER
+        // OmniRoute's own previous_response_id reconstruction (see
+        // src/sse/handlers/chat.ts) -- `body` above is deliberately the
+        // pre-reconstruction raw client bytes (captureDeferredClientRawBody's
+        // whole point) and is NOT what got sent for a continued turn.
+        // resolvePreviousResponseState must chain off this field, not
+        // `body.input`: reading the raw pre-reconstruction input for a
+        // request that was itself a continuation compounds into progressively
+        // truncated history a few hops deep (live incident 2026-09-03,
+        // manifested as a malformed request with no leading system/user
+        // message rejected by the upstream provider).
+        ...(effectiveInput !== undefined
+          ? { effectiveInput: cloneBoundedForLog(effectiveInput) }
+          : {}),
       };
     },
 
@@ -424,6 +467,24 @@ export async function createRequestLogger(
       };
     },
 
+    /**
+     * Record a terminal upstream failure by its already-allowlisted classification INSTEAD of
+     * its response (#3229).
+     *
+     * Deliberately narrower than {@link logProviderResponse}: no status text, no response
+     * headers, no upstream body. Callers pass a small fixed-shape record they have already
+     * projected to a closed set of scalars/enums — this method does not sanitize arbitrary
+     * provider data and must never be handed a raw upstream payload. Used for providers whose
+     * error bodies may echo request content, where the only safe thing to retain is the
+     * classification itself.
+     */
+    logProviderDiagnostic(diagnostic) {
+      payloads.providerResponse = {
+        timestamp: new Date().toISOString(),
+        diagnostic: (diagnostic ? cloneBoundedForLog(diagnostic) : null) as JsonRecord | null,
+      };
+    },
+
     appendProviderChunk: chunkMethods.appendProviderChunk,
     appendOpenAIChunk: chunkMethods.appendOpenAIChunk,
     logConvertedResponse(body) {
@@ -440,6 +501,14 @@ export async function createRequestLogger(
         error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
         requestBody: cloneBoundedForLog(requestBody),
       };
+    },
+
+    logToolLoopReceipt(receipt) {
+      const legs = payloads.toolLoop?.legs ?? [];
+      if (legs.length >= MAX_TOOL_LOOP_LEGS) return;
+      const cloned = cloneBoundedForLog(receipt);
+      if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) return;
+      payloads.toolLoop = { legs: [...legs, cloned as JsonRecord] };
     },
 
     getPipelinePayloads() {

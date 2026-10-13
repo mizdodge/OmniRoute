@@ -1,1 +1,0 @@
-- **chore(release):** synchronize migration-count documentation and document the opt-in `PROXY_LOG_INCLUDE_IPS` logging flag so the v3.8.50 quality gates match the release tree.

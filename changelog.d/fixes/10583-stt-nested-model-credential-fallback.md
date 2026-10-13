@@ -1,1 +1,0 @@
-- **fix(audio):** when a prefix-matched STT provider has no credentials, retry gateways that list the same nested model id (e.g. `deepgram/nova-3` → `openrouter/deepgram/nova-3`) and mention those ids in the 400; stop documenting bare `deepgram/nova-3` as the default example ([#10583](https://github.com/diegosouzapw/OmniRoute/issues/10583))

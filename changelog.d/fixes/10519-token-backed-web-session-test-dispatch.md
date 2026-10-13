@@ -1,1 +1,0 @@
-- **fix(providers):** test token-backed web sessions through their provider validator instead of the OAuth path ([#10519](https://github.com/diegosouzapw/OmniRoute/pull/10519)) — thanks @Zartharas

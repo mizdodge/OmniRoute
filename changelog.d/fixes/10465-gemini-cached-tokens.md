@@ -1,1 +1,0 @@
-- **fix(usage):** surface Gemini `cachedContentTokenCount` into `cached_tokens` for non-streaming requests so cache-hit accounting matches the OpenAI/Claude/Responses branches and the streaming path (follow-up to the #10430 envelope fix) ([#10465](https://github.com/diegosouzapw/OmniRoute/pull/10465)) — thanks @rqzbeh

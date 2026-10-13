@@ -1,1 +1,0 @@
-- **perf(logging):** bound each scheduled call-log rotation pass to incremental database and filesystem work (#10125)

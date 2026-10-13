@@ -1,1 +1,0 @@
-- **fix(providers):** allow token-backed web sessions stored with `authType: "cookie"` to refresh their token through the provider update API ([#10518](https://github.com/diegosouzapw/OmniRoute/pull/10518)) — thanks @Zartharas

@@ -1,1 +1,0 @@
-- **docs:** add an embeddings client runbook with live-verified working/broken model ids and Hindsight 0.9.1 / Memorix 1.6.0 notes — thanks @RaviTharuma

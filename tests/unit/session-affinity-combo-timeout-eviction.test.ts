@@ -44,13 +44,13 @@ const timedOutSignal = () => abortedWith(new Error(abortReasons.COMBO_PER_MODEL_
 
 test.beforeEach(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 });
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("evicts the pin when the combo per-model timeout abandons the pinned account", () => {
@@ -170,8 +170,13 @@ test("the combo timeout runner aborts with the shared reason constant", () => {
   );
   assert.match(
     src,
-    /timeoutController\.abort\(new Error\(COMBO_PER_MODEL_TIMEOUT_REASON\)\)/,
-    "the runner must use the constant the eviction predicate matches on"
+    /const abortErr = new Error\(COMBO_PER_MODEL_TIMEOUT_REASON\)/,
+    "the runner must construct the shared timeout reason"
+  );
+  assert.match(
+    src,
+    /timeoutController\.abort\(abortErr\)/,
+    "the runner must abort with that Error so the eviction predicate matches"
   );
 });
 

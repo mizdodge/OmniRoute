@@ -33,7 +33,12 @@ async function resetTestDataDir() {
         if (/^storage\.sqlite(?:-shm|-wal)?$/i.test(entry)) {
           continue;
         }
-        fs.rmSync(path.join(TEST_DATA_DIR, entry), { recursive: true, force: true });
+        fs.rmSync(path.join(TEST_DATA_DIR, entry), {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        });
       }
       const db = core.getDbInstance();
       db.prepare("DELETE FROM call_logs").run();
@@ -121,7 +126,7 @@ test.after(async () => {
 
 test("call log file rotation honors both retention days and file count", () => {
   assert.ok(CALL_LOGS_DIR, "CALL_LOGS_DIR should resolve for test data dir");
-  fs.rmSync(CALL_LOGS_DIR, { recursive: true, force: true });
+  fs.rmSync(CALL_LOGS_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(CALL_LOGS_DIR, { recursive: true });
 
   const now = Date.now();
@@ -235,7 +240,7 @@ test("rotateCallLogs swallows filesystem errors during cleanup", () => {
 
 test("cleanupOverflowCallLogFiles ignores rmSync failures for old artifacts", () => {
   assert.ok(CALL_LOGS_DIR, "CALL_LOGS_DIR should resolve for test data dir");
-  fs.rmSync(CALL_LOGS_DIR, { recursive: true, force: true });
+  fs.rmSync(CALL_LOGS_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(CALL_LOGS_DIR, { recursive: true });
 
   const dayDir = path.join(CALL_LOGS_DIR, "2026-04-02");

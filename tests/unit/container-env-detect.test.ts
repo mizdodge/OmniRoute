@@ -146,6 +146,40 @@ test("hasBindMountAt is false for an unmounted container path", () => {
   assert.equal(hasBindMountAt("/opt/whatever", mountDeps(HOST_PROFILE_MOUNTINFO)), false);
 });
 
+test("hasBindMountAt ignores tmpfs and other in-memory mounts", () => {
+  // A `--tmpfs /tmp` (or a container whose /tmp is tmpfs) is throwaway storage,
+  // not a route to the host: counting it would clear the ephemeral flag for a
+  // path that loses the file even before the container is recreated.
+  const mountinfo = [
+    "99 30 0:36 / /tmp rw,relatime shared:25 - tmpfs tmpfs rw,size=12582912k,inode64",
+    "32 27 0:27 / /dev/shm rw,nosuid,nodev shared:4 - tmpfs tmpfs rw,inode64",
+    "26 30 0:24 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+    "",
+  ].join("\n");
+  assert.equal(hasBindMountAt("/tmp", mountDeps(mountinfo)), false);
+  assert.equal(hasBindMountAt("/tmp/omniroute-fake-home/.codex", mountDeps(mountinfo)), false);
+  assert.equal(hasBindMountAt("/dev/shm/whatever", mountDeps(mountinfo)), false);
+  assert.equal(hasBindMountAt("/proc/1", mountDeps(mountinfo)), false);
+});
+
+test("hasBindMountAt still honours a real bind mount nested under a tmpfs path", () => {
+  const mountinfo = [
+    "99 30 0:36 / /tmp rw,relatime - tmpfs tmpfs rw,inode64",
+    "44 99 254:1 /Users/me/.codex /tmp/host-home/.codex rw,relatime - ext4 /dev/vda1 rw",
+    "",
+  ].join("\n");
+  assert.equal(hasBindMountAt("/tmp/host-home/.codex", mountDeps(mountinfo)), true);
+  assert.equal(hasBindMountAt("/tmp/host-home", mountDeps(mountinfo)), true);
+  assert.equal(hasBindMountAt("/tmp/other", mountDeps(mountinfo)), false);
+});
+
+test("hasBindMountAt skips a mountinfo line with no filesystem-type separator", () => {
+  // Without the trailing "- <fstype> ..." section the line proves nothing, so
+  // it must not be read as a host mount.
+  const mountinfo = "44 28 254:1 / /host-home rw,relatime shared:1\n";
+  assert.equal(hasBindMountAt("/host-home", mountDeps(mountinfo)), false);
+});
+
 test("hasBindMountAt never treats / as a bind mount", () => {
   assert.equal(hasBindMountAt("/", mountDeps(HOST_PROFILE_MOUNTINFO)), false);
 });

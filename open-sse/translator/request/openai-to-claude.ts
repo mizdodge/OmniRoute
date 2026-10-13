@@ -3,14 +3,24 @@ import { FORMATS } from "../formats.ts";
 // CLAUDE_SYSTEM_PROMPT import removed — no longer injected unconditionally (#1966/#2130)
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../../config/providerModels.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
-import { sanitizeToolId } from "../helpers/schemaCoercion.ts";
+import { normalizeClaudeToolInputSchema, sanitizeToolId } from "../helpers/schemaCoercion.ts";
 import { safeParseJSON } from "../helpers/jsonUtil.ts";
-import { applyKimiCodingThinking } from "../helpers/claudeHelper.ts";
+import {
+  applyKimiCodingThinking,
+  createDefaultClaudeCacheControl,
+} from "../helpers/claudeHelper.ts";
 import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
-import { getDefaultThinkingBudget, isAdaptiveThinkingOnly } from "../../../src/shared/constants/modelSpecs.ts";
+import {
+  getDefaultThinkingBudget,
+  isAdaptiveThinkingOnly,
+} from "../../../src/shared/constants/modelSpecs.ts";
 import { fitThinkingToMaxTokens } from "./openai-to-claude/thinkingBudget.ts";
 import { enforceToolResultAdjacency } from "./openai-to-claude/toolResultAdjacency.ts";
 import { sanitizeToolResultId } from "./openai-to-claude/sanitizeToolResultId.ts";
+import {
+  openAiImagePartToClaudeBlock,
+  normalizeToolResultImages,
+} from "./openai-to-claude/imageBlocks.ts";
 
 // Reasoning-effort levels Anthropic accepts on `output_config.effort`. Used to steer
 // adaptive-only Claude models (Opus 4.7+/Fable 5) without ever emitting a manual budget.
@@ -172,8 +182,13 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
   if (body.temperature === undefined && body.top_p !== undefined) {
     result.top_p = body.top_p;
   }
-  if (body.stop !== undefined) {
-    result.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  // `stop: null` is how many OpenAI-compatible clients serialize "no stop"; wrapping it
+  // would send `stop_sequences: [null]`, which Anthropic rejects with a 400.
+  const stopSequences = (Array.isArray(body.stop) ? body.stop : [body.stop]).filter(
+    (value) => typeof value === "string" && value !== ""
+  );
+  if (stopSequences.length > 0) {
+    result.stop_sequences = stopSequences;
   }
 
   // Thinking configuration
@@ -427,10 +442,13 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
         // MCP tools (e.g. pencil, computer_use) may omit properties on object-type schemas.
         const rawSchema: Record<string, unknown> = toolData.parameters ||
           toolData.input_schema || { type: "object", properties: {}, required: [] };
-        const normalizedSchema =
+        const withProperties =
           rawSchema.type === "object" && !rawSchema.properties
             ? { ...rawSchema, properties: {} }
             : rawSchema;
+        // Flatten a root-level anyOf/oneOf/allOf: Anthropic refuses it outright with
+        // "input_schema does not support oneOf, allOf, or anyOf at the top level" (#13552).
+        const normalizedSchema = normalizeClaudeToolInputSchema(withProperties);
 
         return {
           name: toolName,
@@ -447,7 +465,7 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
     // rejects cache_control on defer_loading tools.
     for (let i = result.tools.length - 1; i >= 0; i--) {
       if (!result.tools[i].defer_loading) {
-        result.tools[i].cache_control = { type: "ephemeral", ttl: "1h" };
+        result.tools[i].cache_control = createDefaultClaudeCacheControl(routedProvider);
         break;
       }
     }
@@ -484,7 +502,7 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
     const systemBlock = {
       type: "text",
       text: systemText,
-      cache_control: { type: "ephemeral", ttl: "1h" },
+      cache_control: createDefaultClaudeCacheControl(routedProvider),
     };
     // Merge with existing body.system if present
     if (Array.isArray(body.system)) {
@@ -534,13 +552,18 @@ function getContentBlocksFromMessage(
     const sanitizedToolUseId = sanitizeToolResultId(msg.tool_call_id); // #7705
     if (!sanitizedToolUseId) return blocks;
     // T02: Strip empty text blocks from nested tool_result content to avoid Anthropic 400
-    const toolContent = Array.isArray(msg.content)
-      ? stripEmptyTextBlocks(msg.content)
-      : msg.content;
+    // #9692: rewrite OpenAI image_url parts to Claude image blocks (same as user turns)
+    const toolContent = normalizeToolResultImages(
+      Array.isArray(msg.content) ? stripEmptyTextBlocks(msg.content) : msg.content
+    );
     blocks.push({
       type: "tool_result",
       tool_use_id: sanitizedToolUseId,
       content: toolContent,
+      // Zed's cloud proxy (cloud.zed.dev/completions) strictly requires
+      // `is_error` on every Anthropic tool_result block. OpenAI tool messages
+      // carry no such flag, so default to false unless the caller set it.
+      is_error: msg.is_error === true,
     });
   } else if (msg.role === "user") {
     if (typeof msg.content === "string") {
@@ -555,43 +578,21 @@ function getContentBlocksFromMessage(
           // Skip tool_result with no tool_use_id (would be useless and may cause errors)
           if (!part.tool_use_id) continue;
           // T02: strip empty text blocks from nested content before passing to Anthropic
-          const resultContent = Array.isArray(part.content)
-            ? stripEmptyTextBlocks(part.content)
-            : part.content;
+          // #9692: convert OpenAI image_url nested in tool_result the same way
+          const resultContent = normalizeToolResultImages(
+            Array.isArray(part.content) ? stripEmptyTextBlocks(part.content) : part.content
+          );
           blocks.push({
             type: "tool_result",
             tool_use_id: sanitizeToolId(part.tool_use_id), // #7705
             content: resultContent,
-            ...(part.is_error && { is_error: part.is_error }),
+            // Always emit a boolean: Zed's strict Anthropic parser rejects
+            // tool_result blocks with a missing `is_error` field.
+            is_error: part.is_error === true,
           });
-        } else if (part.type === "image_url") {
-          const url = part.image_url.url;
-          const match = url.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) {
-            blocks.push({
-              type: "image",
-              source: { type: "base64", media_type: match[1], data: match[2] },
-            });
-          } else if (typeof url === "string" && url.trim()) {
-            blocks.push({
-              type: "image",
-              source: { type: "url", url },
-            });
-          }
-        } else if (part.type === "image" && part.source) {
-          blocks.push({ type: "image", source: part.source });
-        } else if (part.type === "image" && typeof part.image === "string") {
-          // AI SDK-style image part: { type: "image", image: "data:...;base64,..." } (#1330)
-          const url = part.image;
-          const match = url.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) {
-            blocks.push({
-              type: "image",
-              source: { type: "base64", media_type: match[1], data: match[2] },
-            });
-          } else if (url.trim()) {
-            blocks.push({ type: "image", source: { type: "url", url } });
-          }
+        } else if (part.type === "image_url" || part.type === "image") {
+          const imageBlock = openAiImagePartToClaudeBlock(part);
+          if (imageBlock) blocks.push(imageBlock);
         } else if (part.type === "file" && (part.file?.file_data || part.file?.data)) {
           // OpenAI Chat Completions file block:
           // {type:"file", file:{filename, file_data:"data:<mime>;base64,..."}}.
@@ -638,13 +639,15 @@ function getContentBlocksFromMessage(
           // turn introduced a `signature:""` thinking block, every subsequent Anthropic leg
           // attempt 400'd and the router silently fell back to codex forever.
           //
-          // Fix: strip thinking blocks whose signature is the empty string — that explicit
-          // empty value is the hallmark of a synthesized block from a non-Anthropic provider.
-          // Thinking blocks with `signature: undefined` (field absent) are legitimate Claude-
-          // format messages and fall through to the DEFAULT_THINKING_CLAUDE_SIGNATURE fallback
-          // as before.
-          if (part.type === "thinking" && part.signature === "") {
-            continue; // drop — synthesized by non-Anthropic provider, no valid signature
+          // Fix: strip thinking blocks that carry no signature at all. `signature: ""` is the
+          // shape codex/gpt-5.x emit; a MISSING field is what the response translator produces
+          // from cross-provider `reasoning_content` (#12105). Neither can be replayed to
+          // Anthropic, and fabricating DEFAULT_THINKING_CLAUDE_SIGNATURE is worse than dropping:
+          // prepareClaudeRequest treats any non-empty signature on the latest assistant turn as
+          // genuine and forwards the block verbatim, so the fake signature 400s upstream. This
+          // mirrors the stricter "non-empty string" check already used in claudeHelper.ts.
+          if (part.type === "thinking" && !part.signature) {
+            continue; // drop — no replayable signature (empty or absent)
           }
           if (part.type === "redacted_thinking" && part.data === "") {
             continue; // drop — same: empty data from non-Anthropic provider
@@ -686,7 +689,7 @@ function getContentBlocksFromMessage(
             type: "tool_use",
             id: sanitizeToolId(tc.id),
             name: toolName,
-            input: tryParseJSON(tc.function.arguments),
+            input: parseToolInput(tc.function.arguments),
           });
         }
       }
@@ -742,8 +745,10 @@ function convertOpenAIToolChoice(choice) {
     if (choice.type === "function" && choice.function?.name) {
       return { type: "tool", name: choice.function.name };
     }
-    // Map OpenAI string types to Claude equivalents
-    if (choice.type === "auto" || choice.type === "none") return { type: "auto" };
+    // Map OpenAI string types to Claude equivalents. Claude has its own "none"; mapping it
+    // to "auto" let the model call tools the client had switched off.
+    if (choice.type === "auto") return { type: "auto" };
+    if (choice.type === "none") return { type: "none" };
     if (choice.type === "required" || choice.type === "any")
       return { type: CLAUDE_TOOL_CHOICE_REQUIRED };
     // If type is "tool" already (Claude-native), pass through
@@ -751,7 +756,8 @@ function convertOpenAIToolChoice(choice) {
     // Fallback: unknown object type — default to auto to avoid 400 errors
     return { type: "auto" };
   }
-  if (choice === "auto" || choice === "none") return { type: "auto" };
+  if (choice === "auto") return { type: "auto" };
+  if (choice === "none") return { type: "none" };
   if (choice === "required") return { type: CLAUDE_TOOL_CHOICE_REQUIRED };
   if (typeof choice === "object" && choice.function) {
     return { type: "tool", name: choice.function.name };
@@ -771,9 +777,10 @@ function extractTextContent(content) {
   return "";
 }
 
-// Try parse JSON (passthrough fallback: return the raw input string on parse error).
-function tryParseJSON(str: unknown): unknown {
-  return safeParseJSON(str, str);
+function parseToolInput(args: unknown): Record<string, unknown> {
+  const parsed = safeParseJSON(args, null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as Record<string, unknown>;
 }
 
 function stripCacheControl(value: unknown): unknown {

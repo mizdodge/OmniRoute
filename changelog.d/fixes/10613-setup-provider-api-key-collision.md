@@ -1,1 +1,0 @@
-- **fix(cli):** `omniroute setup --add-provider --api-key <key>` no longer aborts with "Provider API key is required" — Commander bound the value to the program-level `--api-key` (the OmniRoute server key), leaving the subcommand's own option undefined; `OMNIROUTE_API_KEY` now works as the error message advertised ([#10613](https://github.com/diegosouzapw/OmniRoute/pull/10613))

@@ -13,20 +13,8 @@ export const crofProvider: RegistryEntry = {
   // Source: GET https://crof.ai/v1/models (2026-08-10; includes models absent from the 2026-05-17 roster).
   models: [
     {
-      id: "deepseek-v4-pro-precision",
-      name: "DeepSeek V4 Pro (Precision)",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "deepseek-v4-pro-lightning",
-      name: "DeepSeek V4 Pro (Lightning)",
       supportsReasoning: true,
       supportedThinkingEfforts: CROF_REASONING_EFFORTS,
     },
@@ -43,12 +31,6 @@ export const crofProvider: RegistryEntry = {
       supportedThinkingEfforts: CROF_REASONING_EFFORTS,
     },
     { id: "deepseek-v3.2", name: "DeepSeek V3.2" },
-    {
-      id: "kimi-k2.6-precision",
-      name: "Kimi K2.6 (Precision)",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
     {
       id: "kimi-k2.6",
       name: "Kimi K2.6",
@@ -74,24 +56,6 @@ export const crofProvider: RegistryEntry = {
       supportedThinkingEfforts: CROF_REASONING_EFFORTS,
     },
     {
-      id: "kimi-k2.5-lightning",
-      name: "Kimi K2.5 (Lightning)",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "kimi-k2.5",
-      name: "Kimi K2.5",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "glm-5.1-precision",
-      name: "GLM 5.1 (Precision)",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
       id: "glm-5.1",
       name: "GLM 5.1",
       supportsReasoning: true,
@@ -100,24 +64,6 @@ export const crofProvider: RegistryEntry = {
     {
       id: "glm-5.2",
       name: "GLM 5.2",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "glm-4.7",
-      name: "GLM 4.7",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "glm-4.7-flash",
-      name: "GLM 4.7 Flash",
-      supportsReasoning: true,
-      supportedThinkingEfforts: CROF_REASONING_EFFORTS,
-    },
-    {
-      id: "mimo-v2.5-pro-precision",
-      name: "Mimo 2.5 Pro (Precision)",
       supportsReasoning: true,
       supportedThinkingEfforts: CROF_REASONING_EFFORTS,
     },
@@ -133,7 +79,6 @@ export const crofProvider: RegistryEntry = {
       supportsReasoning: true,
       supportedThinkingEfforts: CROF_REASONING_EFFORTS,
     },
-    { id: "minimax-m2.5", name: "MiniMax M2.5" },
     {
       id: "qwen3.6-27b",
       name: "Qwen3.6 27B",

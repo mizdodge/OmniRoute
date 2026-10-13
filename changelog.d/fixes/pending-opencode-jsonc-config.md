@@ -1,1 +1,0 @@
-- **fix(cli):** recognize native `opencode.jsonc` files in OpenCode detection, generated-provider setup, and dashboard save/apply flows; preserve unrelated JSONC comments and provider settings, write updates back to the selected file, and refuse to overwrite invalid config ([#10227](https://github.com/diegosouzapw/OmniRoute/issues/10227)) — thanks @tito13kfm

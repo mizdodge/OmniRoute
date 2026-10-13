@@ -1,1 +1,0 @@
-- fix(cli): drop the orphaned `resolveOpencodeConfigDir` re-export from `cliRuntime` — it lost its last consumer in #10246 and diverged from the canonical resolver by one directory level (#9985)

@@ -32,11 +32,12 @@ export const NOAUTH_PROVIDERS = {
     noAuth: true,
     hasFree: true,
     serviceKinds: ["llm"],
-    authHint: "No API key required — uses OpenCode's public free endpoint.",
+    authHint:
+      "No API key required — OpenCode's free tier can only be used from within OpenCode (client-contract requests).",
     freeNote:
-      "No API key required — public OpenCode endpoint with Kimi, GLM, Qwen, MiMo, MiniMax models.",
+      "No API key required — public OpenCode endpoint with Kimi, GLM, Qwen, MiMo, MiniMax models. Free tier only works from within OpenCode.",
     notice: {
-      text: "OpenCode Free uses the public OpenCode endpoint (https://opencode.ai/zen/v1). No signup or API key needed. Rate limits apply.",
+      text: "OpenCode Free uses the public OpenCode endpoint (https://opencode.ai/zen/v1). No signup or API key needed. Rate limits apply. OpenCode's free tier can only be used from within OpenCode — requests that do not match the OpenCode client contract are refused with 403 FreeTierError.",
     },
   },
   "duckduckgo-web": {
@@ -73,55 +74,6 @@ export const NOAUTH_PROVIDERS = {
     notice: {
       text: "Cloudflare AI Playground uses a reverse-engineered anonymous WebSocket protocol (no official API). Requires Playwright with a Chromium browser on first request. Rate limits apply per IP (error 3021).",
     },
-  },
-  "felo-web": {
-    id: "felo-web",
-    alias: "felo",
-    name: "Felo",
-    icon: "travel_explore",
-    color: "#5B7FFF",
-    textIcon: "FL",
-    website: "https://felo.ai",
-    noAuth: true,
-    hasFree: true,
-    serviceKinds: ["llm"],
-    freeNote: "Free — anonymous access to Felo's chat/search-agent aggregator. No API key.",
-    authHint: "No credentials required — Felo is a free, no-signup chat/search aggregator.",
-    notice: {
-      text: "Felo uses a reverse-engineered public endpoint (no official API). No signup or API key needed. Behavior may change without notice if Felo updates its frontend.",
-    },
-  },
-  theoldllm: {
-    id: "theoldllm",
-    alias: "tllm",
-    name: "The Old LLM (Free)",
-    icon: "auto_awesome",
-    color: "#8B5CF6",
-    textIcon: "TL",
-    website: "https://theoldllm.vercel.app",
-    noAuth: true,
-    hasFree: true,
-    serviceKinds: ["llm"],
-    freeNote:
-      "Free — GPT-5.4, Claude 4.6 Opus/Sonnet/Haiku, + more. No API key — tokens auto-generated via browser.",
-    authHint:
-      "No credentials required. The executor auto-generates access tokens via an embedded Playwright browser instance.",
-  },
-  chipotle: {
-    id: "chipotle",
-    alias: "pepper",
-    name: "Chipotle Pepper AI (Free)",
-    icon: "restaurant",
-    color: "#C41230",
-    textIcon: "🌯",
-    website: "https://amelia.chipotle.com",
-    noAuth: true,
-    hasFree: true,
-    serviceKinds: ["llm"],
-    freeNote:
-      "Free — Chipotle's Pepper AI (IPsoft Amelia). Anonymous sessions, no API key. Rate-limited.",
-    authHint:
-      "No credentials required. Uses Chipotle's public support chatbot via reverse-engineered SockJS/STOMP protocol.",
   },
   "veoaifree-web": {
     id: "veoaifree-web",
@@ -175,6 +127,49 @@ export const NOAUTH_PROVIDERS = {
       text: "ZCode runs locally through its native app-server. OmniRoute never receives or stores the Z.ai credential.",
     },
   },
+  "codex-app-server": {
+    id: "codex-app-server",
+    alias: "cxa",
+    name: "OpenAI Codex (App-Server)",
+    icon: "code",
+    color: "#10A37F",
+    textIcon: "CA",
+    website: "https://developers.openai.com/codex/cli",
+    noAuth: true,
+    hasFree: false,
+    serviceKinds: ["llm"],
+    isLocalCli: true,
+    // No subscriptionRisk / riskNoticeVariant: unlike the `codex` provider (which
+    // replays your ChatGPT/OpenAI session token to the API), this transport drives
+    // the Codex CLI's own `codex app-server` over JSON-RPC/WebSocket. The CLI owns
+    // and self-refreshes its OAuth (~/.codex/auth.json) exactly like an interactive
+    // `codex` session — OmniRoute never replays a token to the API — so the
+    // "official session not authorized for proxy use" caveat does not apply.
+    authHint:
+      "No token stored by OmniRoute. The Codex CLI app-server manages its own ChatGPT sign-in (~/.codex/auth.json, auto-refreshed). Use \u201cSign in with ChatGPT\u201d if the CLI is not yet authenticated.",
+    notice: {
+      text: "OpenAI Codex (App-Server) drives the Codex CLI's local app-server (JSON-RPC over WebSocket). The CLI self-manages its OpenAI OAuth, so OmniRoute never sees or replays your token. Requires the codex CLI reachable at the configured app-server URL; sign in via the CLI or the dashboard \u201cSign in with ChatGPT\u201d action.",
+    },
+  },
+  uncloseai: {
+    id: "uncloseai",
+    alias: "unc",
+    name: "UncloseAI",
+    icon: "auto_awesome",
+    color: "#8B5CF6",
+    textIcon: "UN",
+    website: "https://uncloseai.com",
+    noAuth: true,
+    hasFree: true,
+    passthroughModels: true,
+    serviceKinds: ["llm"],
+    authHint:
+      "No auth required. API accepts any non-empty string as key for identification. If older built-in models return 404, use Available Models → Import from /models or Auto-Sync; verified live model: Lorbus/Qwen3.6-27B-int4-AutoRound.",
+    freeNote: "Free forever — no signup, no credit card. OpenAI-compatible endpoints.",
+    notice: {
+      text: "UncloseAI needs no API key. API accepts any non-empty string as key for identification. If older built-in models return 404, use Available Models → Import from /models or Auto-Sync.",
+    },
+  },
   aihorde: {
     id: "aihorde",
     alias: "horde",
@@ -201,7 +196,7 @@ export const NOAUTH_PROVIDERS = {
 // upstream path runs through OmniRoute's proxy-aware global fetch. Providers
 // with browser, WebSocket, direct dispatcher, media, or local CLI paths stay
 // hidden until those paths can guarantee the configured provider proxy.
-export const NOAUTH_PROVIDER_PROXY_SUPPORTED = new Set(["opencode", "theoldllm"]);
+export const NOAUTH_PROVIDER_PROXY_SUPPORTED = new Set(["opencode"]);
 
 export function supportsNoAuthProviderProxy(providerId: string): boolean {
   return NOAUTH_PROVIDER_PROXY_SUPPORTED.has(providerId);

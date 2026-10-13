@@ -50,10 +50,13 @@ describe("Claude Code Tool Name Casing Fixes", () => {
     assert.equal(restoreClaudeToolName("exitplanmode"), "ExitPlanMode");
   });
 
-  it("restoreClaudeToolName keeps the #7926 TitleCase→lowercase fallback with no map", () => {
-    // Clients with no request-side map (XML / OpenCode-style) expect lowercase.
-    assert.equal(restoreClaudeToolName("TodoWrite"), "todowrite");
-    assert.equal(restoreClaudeToolName("Read"), "read");
+  it("restoreClaudeToolName keeps canonical TitleCase with no map (#11085 live repro)", () => {
+    // Live-tested 2026-08-22: no-map routes (Claude Code → OpenAI-style
+    // upstreams) receive the gateway's TitleCase echo and must keep it —
+    // downcasing made Claude Code reject its own tools. XML/OpenCode-style
+    // lowercase clients are protected by explicit alias maps instead.
+    assert.equal(restoreClaudeToolName("TodoWrite"), "TodoWrite");
+    assert.equal(restoreClaudeToolName("Read"), "Read");
   });
 
   it("restoreClaudeToolName prefers toolNameMap over the static map", () => {
@@ -150,9 +153,7 @@ describe("Claude Code Tool Name Casing Fixes", () => {
       choices: [
         {
           delta: {
-            tool_calls: [
-              { index: 0, id: "call_123", function: { name: "bash", arguments: "" } },
-            ],
+            tool_calls: [{ index: 0, id: "call_123", function: { name: "bash", arguments: "" } }],
           },
         },
       ],

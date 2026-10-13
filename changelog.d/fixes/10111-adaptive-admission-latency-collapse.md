@@ -1,1 +1,0 @@
-- **fix(admission):** stop the adaptive latency-gradient collapse from permanently locking out ordinary requests — individually valid requests now make solo progress when the system is idle and normal pressure, and the collapsed limit actively recovers on sustained idle windows instead of being stuck; the critical-pressure fuse still wins over solo progress (#10111)

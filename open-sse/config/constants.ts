@@ -28,6 +28,11 @@ export const STREAM_IDLE_TIMEOUT_MS = upstreamTimeouts.streamIdleTimeoutMs;
 // immediate-fail behavior.
 export const STREAM_DISCONNECT_GRACE_PERIOD_MS = upstreamTimeouts.streamDisconnectGracePeriodMs;
 
+// Hard cap for a connected upstream stream. This timer never resets on
+// upstream byte activity and is independent of REQUEST_TIMEOUT_MS. Set
+// STREAM_ACTIVE_TIMEOUT_MS=0 to disable it.
+export const STREAM_ACTIVE_TIMEOUT_MS = upstreamTimeouts.streamActiveTimeoutMs;
+
 // Timeout for the first non-ping SSE event. Inherits REQUEST_TIMEOUT_MS when
 // set, unless STREAM_READINESS_TIMEOUT_MS is specified directly. This must stay
 // conservative for large prompts and slow first-byte reasoning providers.
@@ -54,6 +59,14 @@ export const SSE_HEARTBEAT_INTERVAL_MS = upstreamTimeouts.sseHeartbeatIntervalMs
 // Prevents indefinite hangs when the upstream sends headers but stalls on the body.
 // Defaults to FETCH_TIMEOUT_MS. Override with FETCH_BODY_TIMEOUT_MS env var.
 export const FETCH_BODY_TIMEOUT_MS = upstreamTimeouts.fetchBodyTimeoutMs;
+
+// Hard byte cap on the HuggingChat NDJSON body accumulated by
+// open-sse/executors/huggingchat/jsonlStream.ts. Prevents a stalled/hostile upstream that
+// never emits a terminal `finalAnswer` / `status: finished` marker from buffering
+// indefinitely (#12577). Sized generously for legitimate long completions while staying
+// well below a heap-exhausting size — mirrors the readCappedBuffer/readBodyCapped pattern
+// already used by veoaifree-web.ts and context7-fetch.ts.
+export const HUGGINGCHAT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 // Provider configurations
 // OAuth credentials read from env vars with hardcoded fallbacks for backward compatibility.
@@ -171,9 +184,12 @@ export const HTTP_STATUS = {
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   NOT_ACCEPTABLE: 406,
+  UNPROCESSABLE_ENTITY: 422,
   REQUEST_TIMEOUT: 408,
   GONE: 410,
+  PAYLOAD_TOO_LARGE: 413,
   RATE_LIMITED: 429,
+  PLAN_LIMIT_EXCEEDED: 432,
   SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503,
@@ -263,11 +279,17 @@ export const PROVIDER_PROFILES = {
     circuitBreakerReset: envInt("OMNIROUTE_CIRCUIT_BREAKER_API_KEY_RESET_MS", 30000),
     // Provider-level circuit breaker (entire provider cooldown after repeated failures)
     providerFailureThreshold: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_FAILURE_THRESHOLD", 15), // Scaled for 500+ connections (was 5)
-    providerFailureWindowMs: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_FAILURE_WINDOW_MS", 1800000), // 30min window (was 20min)
+    providerFailureWindowMs: envInt(
+      "OMNIROUTE_PROVIDER_BREAKER_API_KEY_FAILURE_WINDOW_MS",
+      1800000
+    ), // 30min window (was 20min)
     providerCooldownMs: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_COOLDOWN_MS", 600000), // 10min cooldown when threshold reached
     degradationThreshold: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_DEGRADATION_THRESHOLD", 7),
     maxBackoffMultiplier: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_MAX_BACKOFF_MULTIPLIER", 4),
-    backoffEscalationCount: envInt("OMNIROUTE_PROVIDER_BREAKER_API_KEY_BACKOFF_ESCALATION_COUNT", 3),
+    backoffEscalationCount: envInt(
+      "OMNIROUTE_PROVIDER_BREAKER_API_KEY_BACKOFF_ESCALATION_COUNT",
+      3
+    ),
   },
   // Local providers (localhost inference backends like Ollama, LM Studio, oMLX).
   // Not yet wired into getProviderProfile() — will be used when local provider_nodes
@@ -297,14 +319,20 @@ export const DEFAULT_API_LIMITS = {
 // Skip patterns - requests containing these texts will bypass provider
 export const SKIP_PATTERNS = ["Please write a 5-10 word title for the following conversation:"];
 
-// Default maximum number of tools allowed in a request (OpenAI default)
-export const MAX_TOOLS_LIMIT = 128;
+// Default maximum number of tools allowed in a request (OpenAI default).
+// Override with OMNIROUTE_MAX_TOOLS_LIMIT (positive integers only); any other
+// value (zero, negative, fractional, non-numeric) falls back to 128.
+const maxToolsLimitOverride = envInt("OMNIROUTE_MAX_TOOLS_LIMIT", 128);
+export const MAX_TOOLS_LIMIT =
+  Number.isInteger(maxToolsLimitOverride) && maxToolsLimitOverride > 0
+    ? maxToolsLimitOverride
+    : 128;
 
 // ── Credential Health Check ────────────────────────────────────────
 
 /**
  * Interval (ms) for the background credential health check scheduler.
- * Default: 300000 (5 minutes). Minimum: 10000 (10 seconds).
+ * Default: 3600000 (60 minutes). Minimum: 10000 (10 seconds).
  */
 export const CREDENTIAL_HEALTH_CHECK_INTERVAL = (() => {
   const raw = process.env.CREDENTIAL_HEALTH_CHECK_INTERVAL;
@@ -312,7 +340,7 @@ export const CREDENTIAL_HEALTH_CHECK_INTERVAL = (() => {
     const parsed = Number(raw);
     if (Number.isFinite(parsed) && parsed >= 10_000) return parsed;
   }
-  return 300_000;
+  return 3_600_000;
 })();
 
 /**
@@ -343,11 +371,32 @@ export const CREDENTIAL_HEALTH_CACHE_TTL = (() => {
  *   as soon as this many bytes accumulate, regardless of the timer.
  * - EARLY_RETRY_MAX: max transparent re-opens of the upstream stream while the
  *   holdback is still uncommitted (free-claude-code uses 5 total attempts = 4 retries).
+ * - EMPTY_TURN_RETRY_MAX: max bounded retries of a translated stream turn that ends
+ *   with no usable content (same family: bounded retries of a failing stream
+ *   before anything is exposed to the client).
  */
 export const STREAM_RECOVERY = {
   HOLDBACK_MS: 750,
   BUFFER_MAX_BYTES: 65536,
   EARLY_RETRY_MAX: 4,
+  EMPTY_TURN_RETRY_MAX: 4,
+  /**
+   * Minimum character overlap `trimContinuationOverlap` must find between the
+   * already-emitted text and a mid-stream continuation for the continuation to be
+   * accepted as a real resume, rather than an unrelated restart the model produced after
+   * ignoring the assistant-prefill.
+   *
+   * This is a DOCUMENTED TRADE-OFF, not a solved distinction: a model that continues
+   * cleanly with fewer than this many echoed characters (a legitimate, even preferred,
+   * outcome — there was nothing to de-duplicate) is indistinguishable, from string data
+   * alone, from a model that silently restarted on an unrelated sentence. Both produce a
+   * low/zero overlap. Rejecting below this threshold trades some false-positive rejections
+   * of legitimate low-overlap continuations (bounded retry, then a clean close — no data
+   * loss beyond that retry) against not silently gluing two unrelated fragments into one
+   * corrupted, unrecoverable answer. It does not eliminate the residual false negative
+   * either (an accidental coincidence at or above this many characters is still accepted).
+   */
+  MIN_CONTINUATION_OVERLAP_CHARS: 8,
 } as const;
 
 /**

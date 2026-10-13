@@ -1,1 +1,0 @@
-- **fix(models):** honor `MODELS_DEV_SYNC_ENABLED=0` as a hard kill switch over the dashboard setting so a wedged `/healthz` / UI can be recovered without HTTP (`src/lib/modelsDevSync.ts`)

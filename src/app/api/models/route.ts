@@ -10,6 +10,18 @@ import {
   getResolvedModelCapabilities,
 } from "@/lib/modelCapabilities";
 import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
+import { getAllActiveSyncedModels } from "@/lib/db/models/activeSyncedCatalog";
+import { providerUsesExclusiveSyncedListing } from "@/lib/providers/modelListingCapability";
+import {
+  buildSyncedModelIdsByCanonicalProvider,
+  shouldSuppressStaticModelForExclusiveListing,
+} from "@/app/api/v1/models/catalogSyncedCoverage";
+import {
+  isModelInLiveCatalog,
+  loadAuthoritativeLiveCatalogs,
+} from "@/app/api/models/liveCatalogAvailability";
+import { buildAliasMaps } from "@/app/api/v1/models/catalogProviderMaps";
+import { resolveCanonicalProviderId as resolveCanonicalProviderIdFromMaps } from "@/app/api/v1/models/catalogProviderMaps";
 
 interface GetModelsDependencies {
   createCapabilitySnapshot?: typeof createModelCapabilityResolutionSnapshot;
@@ -107,9 +119,58 @@ export async function handleGetModels(request: Request, dependencies: GetModelsD
     const capabilitySnapshot = (
       dependencies.createCapabilitySnapshot ?? createModelCapabilityResolutionSnapshot
     )();
+
+    // #10615: a static row can be `available: true` here while /v1/models has already
+    // dropped it because a provider's live-synced catalog covers it (or, for
+    // exclusive-listing providers like Cursor, replaces the static list entirely).
+    // Recompute the same suppression /v1/models applies so the two endpoints agree.
+    let syncedModelIdsByCanonicalProvider = new Map<string, Set<string>>();
+    let resolveCanonicalProviderIdForStatic: (alias: string) => string = (alias) => alias;
+    try {
+      const syncedModelsByProvider = await getAllActiveSyncedModels();
+      const { aliasToProviderId, providerIdToAlias } = buildAliasMaps();
+      const resolve = (aliasOrId: string, fallbackProviderId?: string) =>
+        resolveCanonicalProviderIdFromMaps(aliasToProviderId, aliasOrId, fallbackProviderId);
+      resolveCanonicalProviderIdForStatic = (alias: string) => resolve(alias);
+      syncedModelIdsByCanonicalProvider = buildSyncedModelIdsByCanonicalProvider(
+        syncedModelsByProvider,
+        resolve,
+        {},
+        providerIdToAlias
+      );
+    } catch {
+      // Synced catalog unavailable — fall through with static-only availability.
+    }
+
+    // #15585: for providers with an authoritative live catalog, dispatch rejects any
+    // model the catalog omits — so that verdict overrides the static-coverage heuristic.
+    // Only providers with an active synced catalog can be authoritative, so skip the rest
+    // (avoids a per-provider catalog + customModels read for every static provider).
+    const authoritativeLive = await loadAuthoritativeLiveCatalogs(
+      candidates
+        .map((m: any) => m.provider as string)
+        .filter(
+          (provider: string) =>
+            (syncedModelIdsByCanonicalProvider.get(resolveCanonicalProviderIdForStatic(provider))
+              ?.size ?? 0) > 0
+        )
+    );
+
     const models = candidates.map((m: any) => {
       const fullModel = `${m.provider}/${m.model}`;
-      const available = !activeProviders || activeProviders.has(m.provider);
+      const canonicalProviderId = resolveCanonicalProviderIdForStatic(m.provider);
+      const syncedForProvider = syncedModelIdsByCanonicalProvider.get(canonicalProviderId);
+      const providerHasSynced = syncedForProvider !== undefined && syncedForProvider.size > 0;
+      const suppressedBySync = shouldSuppressStaticModelForExclusiveListing({
+        exclusiveListing: providerUsesExclusiveSyncedListing(canonicalProviderId),
+        providerHasSynced,
+        staticModelId: m.model,
+        syncedModelIds: syncedForProvider ? [...syncedForProvider] : [],
+      });
+      const liveIds = authoritativeLive.get(m.provider);
+      const available =
+        (!activeProviders || activeProviders.has(m.provider)) &&
+        (liveIds ? isModelInLiveCatalog(m.provider, m.model, liveIds) : !suppressedBySync);
       return {
         ...m,
         fullModel,

@@ -1,1 +1,0 @@
-- **chore(release):** resync the v3.8.50 provider and CLI catalogs, register the existing ChatCore mutation-coverage test, and document the local ZCode handshake identifier so the release quality gates reflect the current tree without changing ratchet baselines.

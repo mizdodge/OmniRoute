@@ -1,1 +1,0 @@
-- fix(sse): exclude search providers from credential-health scheduler sweep to stop burning billed API queries (#9970)

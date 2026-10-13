@@ -14,13 +14,14 @@ process.env.JWT_SECRET = "test-jwt-secret-for-oidc-login";
 // @ts-ignore - intentional for test harness timing (see note at top)
 const core = await import("../../src/lib/db/core.ts");
 // @ts-ignore - intentional for test harness timing
-const localDb = await import("../../src/lib/localDb.ts");
+const { updateSettings } = await import("@/lib/db/settings");
+const localDb = { updateSettings };
 // @ts-ignore - intentional for test harness timing
 const loginRoute = await import("../../src/app/api/auth/oidc/login/route.ts");
 
 async function resetStorage() {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
@@ -30,7 +31,7 @@ test.beforeEach(async () => {
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env.JWT_SECRET;
 });
 

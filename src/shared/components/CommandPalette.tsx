@@ -6,8 +6,11 @@ import { useTranslations } from "next-intl";
 import {
   SIDEBAR_SECTIONS,
   HIDDEN_SIDEBAR_ITEMS_SETTING_KEY,
+  SIDEBAR_PRESET_KEY,
+  ESSENTIALS_ADVANCED_TOOL_IDS,
   normalizeHiddenSidebarItems,
   resolveRuntimeSidebarSections,
+  type HideableSidebarItemId,
   type SidebarItemDefinition,
   type SidebarSectionChild,
 } from "@/shared/constants/sidebarVisibility";
@@ -61,6 +64,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [radarAdminUrl, setRadarAdminUrl] = useState<unknown>(null);
 
   useEffect(() => {
@@ -70,6 +74,9 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
       .then((data) => {
         setHiddenItems(
           new Set(normalizeHiddenSidebarItems(data?.[HIDDEN_SIDEBAR_ITEMS_SETTING_KEY]))
+        );
+        setActivePreset(
+          typeof data?.[SIDEBAR_PRESET_KEY] === "string" ? data[SIDEBAR_PRESET_KEY] : null
         );
         setRadarAdminUrl(data?.radarAdminUrl ?? null);
       })
@@ -104,7 +111,13 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
           if (isSidebarGroup(child)) {
             const subgroupLabel = safeTranslate(child.titleKey, child.titleFallback);
             return child.items
-              .filter((item) => !hiddenItems.has(item.id))
+              .filter((item) => {
+                if (!hiddenItems.has(item.id)) return true;
+                return (
+                  activePreset === "essentials" &&
+                  ESSENTIALS_ADVANCED_TOOL_IDS.has(item.id as HideableSidebarItemId)
+                );
+              })
               .map<PaletteItem>((item) => ({
                 id: item.id,
                 href: item.href,
@@ -121,7 +134,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
               }));
           }
           const item = child as SidebarItemDefinition;
-          if (hiddenItems.has(item.id)) return [];
+          if (hiddenItems.has(item.id)) {
+            const keepForEssentials =
+              activePreset === "essentials" &&
+              ESSENTIALS_ADVANCED_TOOL_IDS.has(item.id as HideableSidebarItemId);
+            if (!keepForEssentials) return [];
+          }
           return [
             {
               id: item.id,
@@ -138,7 +156,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
           ];
         });
       }),
-    [hiddenItems, radarAdminUrl, safeTranslate]
+    [hiddenItems, radarAdminUrl, safeTranslate, activePreset]
   );
 
   const filtered = useMemo(() => {

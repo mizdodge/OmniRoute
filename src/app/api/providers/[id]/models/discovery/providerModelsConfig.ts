@@ -1,11 +1,13 @@
 import { getAntigravityModelsDiscoveryUrls } from "@omniroute/open-sse/config/antigravityUpstream.ts";
 import {
-  GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   getGrokBuildModelsHeaders,
   GROK_BUILD_MODELS_URL,
+  GROK_BUILD_SUPPORTED_REASONING_EFFORTS,
 } from "@omniroute/open-sse/config/grokBuild.ts";
+import { grok_cliProvider } from "@omniroute/open-sse/config/providers/registry/grok-cli/index.ts";
 import { getAntigravityContentHeaders } from "@omniroute/open-sse/services/antigravityHeaders.ts";
 import { parseGeminiModelsList } from "@/lib/providerModels/geminiModelsParser";
+import { buildClaudeModelsHeaders } from "@/lib/providerModels/claudeModelsHeaders";
 import {
   CLINE_MODELS_ENDPOINT,
   CLINEPASS_MODELS_ENDPOINT,
@@ -24,7 +26,11 @@ import { filterAlibabaFreeEligibleModels } from "@omniroute/open-sse/services/al
 import { shouldUseLiveAlibabaFreeModelDiscovery } from "@omniroute/open-sse/services/alibabaFreeTier.ts";
 import { isDashscopeTextModelId } from "@omniroute/open-sse/services/dashscopeTextModels.ts";
 import { extractZaiToken } from "@omniroute/open-sse/services/zaiWebCredentials.ts";
-import { normalizeOpenAiLikeModelsResponse } from "./normalizers";
+import { buildOpencodeBackgroundHeaders } from "@omniroute/open-sse/utils/opencodeHeaders.ts";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { applyConnectionCustomHeaders } from "./connectionCustomHeaders";
+import { buildChatPlaygroundModelsDiscoveryEntry } from "@omniroute/open-sse/services/chatplaygroundModels.ts";
+import { normalizeOpenAiLikeModelsResponse, normalizeWorkbuddyModelsResponse } from "./normalizers";
 
 const QWEN_CLOUD_TEXT_MODEL_IDS = new Set(QWEN_CLOUD_TEXT_MODELS.map((model) => model.id));
 const ALIBABA_MODEL_STUDIO_MODEL_IDS = new Set(
@@ -86,10 +92,29 @@ export function parseAlibabaModelStudioModelsForConnection(
 export function parseQwenCloudTextModels(data: any): any[] {
   return parseCuratedDashscopeModels(data, QWEN_CLOUD_TEXT_MODELS, QWEN_CLOUD_TEXT_MODEL_IDS);
 }
-type ProviderModelsHeaderContext = {
+
+// Perplexity's /v1/models lists the Agent API catalog (vendor-prefixed ids like
+// "anthropic/claude-fable-5"), but chat requests always go to the classic
+// /chat/completions endpoint, which only accepts the Sonar family. Filter
+// discovery to Sonar-family ids so agent-style ids never surface as routable
+// chat models (#11060). Bounded pattern — no ReDoS-prone quantifiers.
+export function parsePerplexitySonarModels(data: any): any[] {
+  const models = Array.isArray(data?.data)
+    ? data.data
+    : Array.isArray(data?.models)
+      ? data.models
+      : [];
+  return models.filter(
+    (model: any) => typeof model?.id === "string" && /^sonar(-|$)/.test(model.id)
+  );
+}
+export type ProviderModelsHeaderContext = {
+  id?: string;
   authType?: string;
   providerSpecificData?: unknown;
   email?: string | null;
+  accessToken?: string | null;
+  apiKey?: string | null;
 };
 
 export type ProviderModelsConfigEntry = {
@@ -106,6 +131,19 @@ export type ProviderModelsConfigEntry = {
   ) => Record<string, string>;
   parseResponse: (data: any) => any;
 };
+
+export function assembleProviderModelsHeaders(
+  config: ProviderModelsConfigEntry,
+  token: string,
+  context?: ProviderModelsHeaderContext
+): Record<string, string> {
+  const headers = config.buildHeaders ? config.buildHeaders(token, context) : { ...config.headers };
+  if (!config.buildHeaders && config.authHeader && !config.authQuery) {
+    headers[config.authHeader] = (config.authPrefix || "") + token;
+  }
+  applyConnectionCustomHeaders(headers, context?.providerSpecificData);
+  return headers;
+}
 
 const DASHSCOPE_TEXT_MODELS_CONFIG: ProviderModelsConfigEntry = {
   url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
@@ -213,6 +251,37 @@ function grokBuildPositiveNumber(...values: unknown[]): number | undefined {
   );
 }
 
+const GROK_CLI_REGISTRY_CONTEXT_BY_ID = new Map<string, number>(
+  grok_cliProvider.models.flatMap((model) => {
+    const window = model.contextLength;
+    return typeof window === "number" && Number.isInteger(window) && window > 0
+      ? ([[model.id, window]] as Array<[string, number]>)
+      : [];
+  })
+);
+
+function resolveGrokBuildInputTokenLimit(
+  model: GrokBuildModelRecord,
+  metadata: GrokBuildModelRecord,
+  id: string
+): number | undefined {
+  // Registry first. Grok Build's /v1/models advertises contextWindow 256000 for every
+  // model, yet the backend serves grok-4.6 up to 500k (prod: 88 successful requests
+  // with 256k-485k input; upstream rejects at "> 500000 tokens"). Trusting the
+  // advertised number pinned 256k auto:discovery overrides over the verified window.
+  // Models the registry does not know keep the upstream number — under-advertising
+  // only makes clients compact early — and never get an invented default.
+  return (
+    GROK_CLI_REGISTRY_CONTEXT_BY_ID.get(id) ??
+    grokBuildPositiveNumber(
+      model.contextWindow,
+      model.context_window,
+      metadata.contextWindow,
+      metadata.totalContextTokens
+    )
+  );
+}
+
 function getGrokBuildModelItems(data: unknown): unknown[] {
   const envelope = asGrokBuildRecord(data);
   if (Array.isArray(data)) return data;
@@ -220,7 +289,10 @@ function getGrokBuildModelItems(data: unknown): unknown[] {
   return Array.isArray(envelope.models) ? envelope.models : [];
 }
 
-function hasGrokBuildReasoning(model: GrokBuildModelRecord, metadata: GrokBuildModelRecord) {
+function hasGrokBuildReasoning(
+  model: GrokBuildModelRecord,
+  metadata: GrokBuildModelRecord
+): boolean {
   const flags = [
     model.supportsReasoningEffort,
     model.supports_reasoning_effort,
@@ -243,6 +315,46 @@ function hasGrokBuildReasoning(model: GrokBuildModelRecord, metadata: GrokBuildM
     ) !== undefined ||
     effortLists.some((value) => Array.isArray(value) && value.length > 0)
   );
+}
+
+function getGrokBuildReasoningEfforts(
+  model: GrokBuildModelRecord,
+  metadata: GrokBuildModelRecord
+): string[] {
+  const supported = new Set(GROK_BUILD_SUPPORTED_REASONING_EFFORTS);
+  const effortLists = [
+    model.reasoningEfforts,
+    model.reasoning_efforts,
+    metadata.reasoningEfforts,
+    metadata.reasoning_efforts,
+  ];
+  const hasExplicitEffortList = effortLists.some((value) => Array.isArray(value));
+  const discovered = effortLists
+    .flatMap((value) => (Array.isArray(value) ? value : []))
+    .map((value) => {
+      if (typeof value === "string") return value;
+      if (value && typeof value === "object") {
+        const record = value as { value?: unknown; id?: unknown };
+        const named = typeof record.value === "string" ? record.value.trim() : "";
+        if (named) return named;
+        return typeof record.id === "string" ? record.id : "";
+      }
+      return "";
+    })
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => supported.has(value));
+  if (hasExplicitEffortList) return [...new Set(discovered)];
+
+  const singleEffort = grokBuildString(
+    model.reasoningEffort,
+    model.reasoning_effort,
+    metadata.reasoningEffort,
+    metadata.reasoning_effort
+  )?.toLowerCase();
+  if (singleEffort && supported.has(singleEffort)) return [singleEffort];
+  // No list in the payload. The boolean only proves reasoning exists.
+  // grok-4.5 advertises low/medium/high. xhigh is kept only when named.
+  return hasGrokBuildReasoning(model, metadata) ? ["low", "medium", "high"] : [];
 }
 
 function normalizeGrokBuildModel(value: unknown): GrokBuildModelRecord | null {
@@ -273,27 +385,24 @@ function normalizeGrokBuildModel(value: unknown): GrokBuildModelRecord | null {
   // here would route their request shape to the wrong upstream endpoint.
   if (backend !== "responses") return null;
 
-  const inputTokenLimit =
-    grokBuildPositiveNumber(
-      model.contextWindow,
-      model.context_window,
-      metadata.contextWindow,
-      metadata.totalContextTokens
-    ) || GROK_BUILD_DEFAULT_CONTEXT_WINDOW;
+  const inputTokenLimit = resolveGrokBuildInputTokenLimit(model, metadata, id);
   const outputTokenLimit = grokBuildPositiveNumber(
     model.maxCompletionTokens,
     model.max_completion_tokens
   );
   const description = grokBuildString(model.description);
+  const supportsThinking = hasGrokBuildReasoning(model, metadata);
+  const supportedThinkingEfforts = getGrokBuildReasoningEfforts(model, metadata);
 
   return {
     id,
     name: grokBuildString(model.name, id) || id,
     owned_by: "grok-cli",
     ...(description ? { description } : {}),
-    inputTokenLimit,
+    ...(typeof inputTokenLimit === "number" ? { inputTokenLimit } : {}),
     ...(outputTokenLimit ? { outputTokenLimit } : {}),
-    ...(hasGrokBuildReasoning(model, metadata) ? { supportsThinking: true } : {}),
+    ...(supportsThinking ? { supportsThinking: true } : {}),
+    ...(supportedThinkingEfforts.length > 0 ? { supportedThinkingEfforts } : {}),
     apiFormat: "responses",
     supportedEndpoints: ["responses"],
   };
@@ -327,18 +436,110 @@ const KIMI_CODING_MODELS_CONFIG: ProviderModelsConfigEntry = {
   parseResponse: parseKimiCodingModels,
 };
 
+const OPENCODE_DISCOVERY_PARSE = (data: any) => data.data || data.models || [];
+
+/**
+ * Stable background-identity seed for one connection. Prefers the workspace id
+ * (all three spellings the providerSpecificData validator accepts) so
+ * connections sharing a workspace group under one upstream identity, then
+ * falls back to the connection id so a workspace-less connection still gets a
+ * deterministic session instead of a fresh anonymous UUID per discovery call.
+ */
+function readOpencodeBackgroundSeed(connection?: ProviderModelsHeaderContext): string | null {
+  const psd = connection?.providerSpecificData;
+  if (psd && typeof psd === "object") {
+    const record = psd as Record<string, unknown>;
+    for (const key of ["openCodeGoWorkspaceId", "opencodeGoWorkspaceId", "workspaceId"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) return value.trim();
+    }
+  }
+  const id = connection?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id.trim() : null;
+}
+
+/**
+ * Discovery entry for the opencode-family providers with the OpenCode CLI
+ * identity headers attached (User-Agent + x-opencode-session/request/client/
+ * project). Bare runtime fetches (UA "Bun fetch", no session header) are
+ * exactly the shape OpenCode's operator warning names — enforcement of the
+ * header is announced from 2026-09-06. The session id is a stable
+ * per-workspace/connection fingerprint so background discovery groups under
+ * one identity upstream instead of a fresh anonymous client per call.
+ */
+function buildOpencodeModelsDiscoveryEntry(url: string): ProviderModelsConfigEntry {
+  return {
+    url,
+    method: "GET",
+    headers: { Accept: "application/json" },
+    buildHeaders: (token, connection) => ({
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      ...buildOpencodeBackgroundHeaders({ seed: readOpencodeBackgroundSeed(connection) }),
+    }),
+    parseResponse: OPENCODE_DISCOVERY_PARSE,
+  };
+}
+// Also used, behind the XAI_OAUTH_LIVE_MODEL_DISCOVERY flag, to fetch a live
+// catalog for xai-oauth (see getXaiOauthLiveModelsConfig below). Whether x.ai
+// accepts an OAuth bearer at this endpoint is unverified — that is why
+// xai-oauth is not registered in PROVIDER_MODELS_CONFIG below and stays on
+// its frozen static seed (open-sse/config/providers/registry/xai/index.ts)
+// unless the flag is explicitly turned on.
+// x.ai /v1/models lists Grok Imagine media models next to the chat models without a
+// type field. Tag them so they stay out of chat catalogs and auto/* pools.
+function tagXaiMediaModel(model: unknown) {
+  if (!model || typeof model !== "object") return model;
+  const id = typeof (model as { id?: unknown }).id === "string" ? (model as { id: string }).id : "";
+  if (/^grok-imagine-image/i.test(id)) {
+    return { ...model, supportedEndpoints: ["images"], modelType: "image" };
+  }
+  if (/^grok-imagine-video/i.test(id)) return { ...model, supportedEndpoints: ["videos"] };
+  return model;
+}
+
+export const XAI_MODELS_CONFIG: ProviderModelsConfigEntry = {
+  url: "https://api.x.ai/v1/models",
+  method: "GET",
+  headers: { "Content-Type": "application/json" },
+  authHeader: "Authorization",
+  authPrefix: "Bearer ",
+  parseResponse: (data) => {
+    const models = data.data || data.models || [];
+    return Array.isArray(models) ? models.map(tagXaiMediaModel) : models;
+  },
+};
+
+/**
+ * Resolve the live-discovery config for xai-oauth when the
+ * XAI_OAUTH_LIVE_MODEL_DISCOVERY flag is on, or `undefined` when it is off
+ * (or its resolution throws) so the caller falls back to the frozen static
+ * seed — the flag defaults to "true" and fails closed on any error.
+ */
+export function getXaiOauthLiveModelsConfig(): ProviderModelsConfigEntry | undefined {
+  try {
+    return isFeatureFlagEnabled("XAI_OAUTH_LIVE_MODEL_DISCOVERY") ? XAI_MODELS_CONFIG : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Provider models endpoints configuration
 export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> = {
   alibaba: ALIBABA_MODEL_STUDIO_MODELS_CONFIG,
   "alibaba-cn": ALIBABA_MODEL_STUDIO_MODELS_CONFIG,
   claude: {
-    url: "https://api.anthropic.com/v1/models",
+    url: "https://api.anthropic.com/v1/models?limit=1000",
     method: "GET",
     headers: {
-      "Anthropic-Version": "2023-06-01",
+      "anthropic-version": "2023-06-01",
       "Content-Type": "application/json",
     },
-    authHeader: "x-api-key",
+    buildHeaders: (_token, context) =>
+      buildClaudeModelsHeaders({
+        accessToken: context?.accessToken,
+        apiKey: context?.apiKey,
+      }),
     parseResponse: (data) => data.data || [],
   },
   gemini: {
@@ -355,25 +556,6 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authHeader: "Authorization",
     authPrefix: "Bearer ",
     parseResponse: (data) => normalizeOpenAiLikeModelsResponse(data, "huggingface"),
-  },
-  // #3931: qwen-web (cookie provider) was missing here, so its discovery page
-  // showed nothing.
-  // `chat.qwen.ai/api/v2/models/` is public (no auth header configured/sent);
-  // shape `{ data: { data: [{ id, name, owned_by }] } }`, flatter `{ data: [] }` fallback.
-  "qwen-web": {
-    url: "https://chat.qwen.ai/api/v2/models/",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    parseResponse: (data) => {
-      const innerData = data?.data?.data || data?.data || [];
-      return (Array.isArray(innerData) ? innerData : [])
-        .map((item: any) => ({
-          id: item.id || item.name,
-          name: item.name || item.id,
-          owned_by: item.owned_by || "qwen",
-        }))
-        .filter((m: any) => m.id);
-    },
   },
   "qwen-cloud": QWEN_CLOUD_TEXT_MODELS_CONFIG,
   antigravity: {
@@ -538,14 +720,12 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
-  xai: {
-    url: "https://api.x.ai/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
-  },
+  xai: XAI_MODELS_CONFIG,
+  // xai-oauth intentionally NOT registered here: it stays on the frozen
+  // static seed unless XAI_OAUTH_LIVE_MODEL_DISCOVERY is on (see
+  // getXaiOauthLiveModelsConfig above) — keeping this map's keys in lockstep
+  // with HARDCODED_MODELS_CONFIG_IDS (tests/unit/discovery-class.test.ts)
+  // means the flag gate has to live at the lookup call site, not here.
   mistral: {
     url: "https://api.mistral.ai/v1/models",
     method: "GET",
@@ -622,6 +802,17 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     method: "GET",
     headers: { Accept: "application/json" },
     parseResponse: parseClinepassRecommendedModels,
+  },
+  // Perplexity's /v1/models lists the Agent API catalog (vendor-prefixed agent
+  // ids), but chat only accepts the Sonar family on /chat/completions. Import
+  // must keep Sonar-family ids only (#11060).
+  perplexity: {
+    url: "https://api.perplexity.ai/v1/models",
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: parsePerplexitySonarModels,
   },
   cohere: {
     url: "https://api.cohere.com/v2/models",
@@ -711,22 +902,12 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
-  "opencode-zen": {
-    url: "https://opencode.ai/zen/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
-  },
-  "opencode-go": {
-    url: "https://opencode.ai/zen/go/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
-  },
+  // OpenCode CLI identity headers on all three opencode-family entries (see
+  // buildOpencodeModelsDiscoveryEntry above for why — bare "Bun fetch" calls
+  // without x-opencode-session are what OpenCode's operator warning names).
+  opencode: buildOpencodeModelsDiscoveryEntry("https://opencode.ai/zen/v1/models"),
+  "opencode-zen": buildOpencodeModelsDiscoveryEntry("https://opencode.ai/zen/v1/models"),
+  "opencode-go": buildOpencodeModelsDiscoveryEntry("https://opencode.ai/zen/go/v1/models"),
   "glm-cn": {
     url: "https://open.bigmodel.cn/api/coding/paas/v4/models",
     method: "GET",
@@ -750,5 +931,21 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authHeader: "Authorization",
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
+  },
+  chatplayground: buildChatPlaygroundModelsDiscoveryEntry(),
+  cpl: buildChatPlaygroundModelsDiscoveryEntry(),
+  // WorkBuddy serves no OpenAI-shaped /models endpoint (/v1/models and
+  // /v2/models both 404) and its bundled catalog is known to be stale, so the
+  // roster is read from the authenticated config the official CLI itself uses.
+  // The registry entry stays `models: []` + `passthroughModels: true`; this is
+  // what fills the dashboard. See normalizeWorkbuddyModelsResponse for what was
+  // verified live vs. taken from the shipped CLI catalog.
+  workbuddy: {
+    url: "https://www.workbuddy.ai/v3/config",
+    method: "GET",
+    headers: { "Content-Type": "application/json", "X-Product": "SaaS" },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: (data) => normalizeWorkbuddyModelsResponse(data),
   },
 };

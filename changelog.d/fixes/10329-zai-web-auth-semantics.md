@@ -1,1 +1,0 @@
-- **fix(providers):** validate Z.ai web Local Storage sessions against the authenticated user-settings endpoint and preserve exact upstream status codes ([#10329](https://github.com/diegosouzapw/OmniRoute/pull/10329)) — thanks @Zartharas

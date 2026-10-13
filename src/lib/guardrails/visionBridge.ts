@@ -19,6 +19,7 @@ import {
   ensureBase64ImagesForClaudeWire,
 } from "./visionBridgeHelpers";
 import { fetch as undiciFetch } from "undici";
+import { detectMediaParts } from "@omniroute/open-sse/utils/mediaParts";
 import {
   getVisionBridgeConfig,
   isVisionBridgeForcedModel,
@@ -31,10 +32,101 @@ import {
   isProviderConnectionUsable,
   hasUsableCredentialsForModel,
 } from "./visionBridgeCredentials";
+import { MAX_COMBO_DEPTH } from "@omniroute/open-sse/services/combo/comboPredicates.ts";
 
 export { isProviderConnectionUsable, hasUsableCredentialsForModel };
 
 type ComboVisionBridgeDecision = "process" | "skip" | "not-combo" | "no-vision";
+
+type LeafVisionTally = { hasVision: boolean; hasNonVision: boolean };
+
+/// Evaluate a single `kind: "model"` step's proven vision capability.
+/// Returns null when the step lacks a valid model string (malformed step).
+function evaluateModelStepCapability(s: Record<string, unknown>): "vision" | "non-vision" | null {
+  const targetModel = s.model;
+  if (typeof targetModel !== "string") return null;
+  const provider =
+    typeof s.providerId === "string"
+      ? s.providerId
+      : typeof s.provider === "string"
+        ? s.provider
+        : null;
+  const caps = getResolvedModelCapabilities({ provider, model: targetModel });
+  return caps.supportsVision === true ? "vision" : "non-vision";
+}
+
+/// Recursively resolve a `combo-ref` step to its real leaf models' vision
+/// capability, reusing the same MAX_COMBO_DEPTH guard as the flatten dispatch
+/// path (open-sse/services/combo/comboStructure.ts) plus a visited-set cycle
+/// guard, so this request-hot-path lookup can never recurse unbounded or loop
+/// on a cyclic combo-ref chain.
+///
+/// Unresolvable cases (combo not found, empty/invalid models, depth exceeded,
+/// or a cycle) fall back to treating the combo-ref step as a single
+/// non-vision-capable leaf -- conservative, but no longer forces the WHOLE
+/// outer combo to "process" the way the old unconditional shortcut did.
+async function resolveComboRefVisionCapability(
+  comboName: string,
+  visited: Set<string>,
+  depth: number
+): Promise<LeafVisionTally> {
+  const fallback: LeafVisionTally = { hasVision: false, hasNonVision: true };
+  if (depth > MAX_COMBO_DEPTH || visited.has(comboName)) return fallback;
+
+  const { getComboByName } = await import("@/lib/db/combos");
+  const nestedCombo = await getComboByName(comboName);
+  if (!nestedCombo) return fallback;
+
+  const nestedVisited = new Set(visited);
+  nestedVisited.add(comboName);
+
+  const nestedRawModels = (nestedCombo as Record<string, unknown>).models;
+  if (!Array.isArray(nestedRawModels) || nestedRawModels.length === 0) return fallback;
+
+  const tally: LeafVisionTally = { hasVision: false, hasNonVision: false };
+  let hasLeaf = false;
+  for (const step of nestedRawModels) {
+    const s = step as Record<string, unknown>;
+    if (s.kind === "combo-ref" && typeof s.comboName === "string") {
+      hasLeaf = true;
+      const nested = await resolveComboRefVisionCapability(s.comboName, nestedVisited, depth + 1);
+      tally.hasVision = tally.hasVision || nested.hasVision;
+      tally.hasNonVision = tally.hasNonVision || nested.hasNonVision;
+      continue;
+    }
+    if (s.kind === "model") {
+      hasLeaf = true;
+      const capability = evaluateModelStepCapability(s);
+      if (capability === "vision") tally.hasVision = true;
+      else tally.hasNonVision = true;
+    }
+  }
+
+  return hasLeaf ? tally : fallback;
+}
+
+/**
+ * Count images nested in Responses tool outputs. `extractImageParts` deliberately
+ * excludes nested media because description replacement only knows how to splice
+ * top-level content parts; whole-request rerouting has no such restriction and
+ * must still notice these images so the raw Responses body can reach a native
+ * vision target unchanged.
+ */
+function countNestedToolOutputImages(items: unknown[]): number {
+  let count = 0;
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (record.type !== "function_call_output" && record.type !== "custom_tool_call_output") {
+      continue;
+    }
+    if (!Array.isArray(record.output)) continue;
+    count += detectMediaParts([{ content: record.output }]).filter(
+      (part) => part.kind === "image"
+    ).length;
+  }
+  return count;
+}
 
 export function resolveVisionComboName(mapping: Record<string, unknown>): string | null {
   const comboName = mapping.comboName ?? mapping.name ?? null;
@@ -53,11 +145,17 @@ export async function getComboVisionBridgeDecision(
   model: string
 ): Promise<ComboVisionBridgeDecision> {
   try {
-    const { getComboByName } = await import("@/lib/localDb");
+    const { getComboByName } = await import("@/lib/db/combos");
     const { resolveComboForModel } = await import("@/lib/db/modelComboMappings");
 
-    // 1. Try to find combo by exact name match
+    // 1. Try to find combo by exact name match. The normal Combo resolver also
+    // accepts `combo/<name>` for combos stored under their bare name; keep the
+    // Vision Bridge capability check on the same lookup path.
     let combo = await getComboByName(model);
+
+    if (!combo && model.startsWith("combo/")) {
+      combo = await getComboByName(model.slice("combo/".length));
+    }
 
     // 2. If no exact match, try model-combo mapping
     if (!combo) {
@@ -75,28 +173,43 @@ export async function getComboVisionBridgeDecision(
     if (!Array.isArray(rawModels)) return "process";
 
     // 4. Check each target for vision support
-    // combo-ref → conservative (process images)
+    // combo-ref → recursively resolve the referenced combo's real leaf
+    //   models (depth/cycle-guarded); unresolvable → conservative non-vision leaf
     // model step with no native vision → process images
     // all model steps with native vision → safe to skip
     // zero vision-capable model steps → "no-vision" (reroute-eligible)
     let hasModelStep = false;
     let hasVisionCapableStep = false;
     let hasNonVisionStep = false;
+    const rootComboName =
+      typeof (combo as Record<string, unknown>).name === "string"
+        ? ((combo as Record<string, unknown>).name as string)
+        : model;
     for (const step of rawModels) {
       const s = step as Record<string, unknown>;
-      if (s.kind === "combo-ref") return "process";
+      if (s.kind === "combo-ref") {
+        hasModelStep = true;
+        if (typeof s.comboName !== "string") {
+          hasNonVisionStep = true;
+          continue;
+        }
+        const nested = await resolveComboRefVisionCapability(
+          s.comboName,
+          new Set([rootComboName]),
+          1
+        );
+        if (nested.hasVision) hasVisionCapableStep = true;
+        if (nested.hasNonVision) hasNonVisionStep = true;
+        continue;
+      }
       if (s.kind === "model") {
         hasModelStep = true;
-        const targetModel = s.model;
-        if (typeof targetModel === "string") {
-          const caps = getResolvedModelCapabilities(targetModel);
-          if (caps.supportsVision === true) {
-            hasVisionCapableStep = true;
-          } else {
-            hasNonVisionStep = true;
-          }
+        const capability = evaluateModelStepCapability(s);
+        if (capability === null) return "process";
+        if (capability === "vision") {
+          hasVisionCapableStep = true;
         } else {
-          return "process";
+          hasNonVisionStep = true;
         }
       }
     }
@@ -199,12 +312,18 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // Declare before the conditional so they're available to the rest of preCall
     let forceVisionBridge = false;
     let comboVisionBridgeDecision: ComboVisionBridgeDecision | undefined;
+    // #14003: the requested model's resolved vision capability, hoisted out of
+    // the `!isAuto` block so the reroute gate below can reason about it.
+    // `null` means UNKNOWN (no spec / registry / synced verdict), which is a
+    // different fact from `false` (proven text-only) and must not be conflated.
+    let requestedModelVision: boolean | null = null;
 
     if (!isAuto) {
       forceVisionBridge = isVisionBridgeForcedModel(model);
 
       // 4. Check if model supports vision
       const capabilities = getResolvedModelCapabilities(model);
+      requestedModelVision = capabilities?.supportsVision ?? null;
       comboVisionBridgeDecision = forceVisionBridge
         ? "process"
         : this.deps.checkModelHasComboMapping
@@ -264,9 +383,13 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       return { block: false };
     }
 
-    // 8. Check for images using helper (extractImageParts returns empty if no images)
+    // 8. Check for images. Description mode can only replace top-level parts,
+    // while reroute mode preserves the entire body and therefore also supports
+    // images nested inside Responses function_call_output items.
     const imageParts = extractImageParts(messages as Parameters<typeof extractImageParts>[0]);
-    if (imageParts.length === 0) {
+    const nestedToolImageCount = countNestedToolOutputImages(messages as unknown[]);
+    const detectedImageCount = imageParts.length + nestedToolImageCount;
+    if (detectedImageCount === 0) {
       return { block: false };
     }
 
@@ -294,17 +417,59 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // exactly like a single text-only model, and without this fallback an image
     // request would die in the combo capability filter (capability_mismatch)
     // whenever the describe path cannot run.
+    // #14003: a BARE model id (no `provider/` prefix) with UNKNOWN vision
+    // capability must not be whole-request rerouted.
+    //
+    // For a bare id, getResolvedModelCapabilities resolves `provider` to null,
+    // so getRegistryModel() and getSyncedCapabilityForResolved() are both
+    // skipped and only MODEL_SPECS / isVisionModelId() can produce a verdict.
+    // `supportsVision === null` therefore means OmniRoute has no static
+    // knowledge of that wire id at all. Providers rename and upgrade wire
+    // models faster than the static spec table tracks, so that is a
+    // stale-catalog condition, NOT proof the model is text-only. Hijacking
+    // such a request sent it to a different provider's model with no error: the
+    // reported case routed every `kimi-for-coding` image request to
+    // `command-code/moonshotai/Kimi-K2.6`, so the wrong model answered, the
+    // request was billed against the wrong connection, and `call_logs`
+    // recorded the substitute as intended.
+    //
+    // The credential guard cannot save these requests on its own:
+    // hasUsableCredentialsForModel splits on "/" and treats the model name as a
+    // provider, finds no connection rows, and reports a hard `false` instead of
+    // the `null` that would have failed open. This gate uses the same
+    // string-level notion of a provider prefix.
+    //
+    // The model string, not capabilities.provider, decides "bare": a
+    // provider-qualified id must not be classified as bare, because for those
+    // the registry and synced rows are the authoritative sources. Combos are
+    // excluded as well: a zero-vision combo is deliberately reroute-eligible
+    // (#10415) and its capability is resolved from its targets, not its name.
+    const bareIdUnknownVision =
+      !isAuto &&
+      !forceVisionBridge &&
+      !model.includes("/") &&
+      requestedModelVision === null &&
+      comboVisionBridgeDecision === "not-combo";
+    if (bareIdUnknownVision) {
+      context.log?.warn?.(
+        "VISION_BRIDGE",
+        `Vision capability unknown for bare model ${model}; not whole-request rerouting - describing images and keeping the requested model`
+      );
+    }
     const rerouteEligible =
+      runtime.mode === "reroute" ||
       rerouteTextOnly ||
-      ((comboVisionBridgeDecision === "not-combo" ||
-        comboVisionBridgeDecision === "no-vision" ||
-        isAuto) &&
+      (!bareIdUnknownVision &&
+        (comboVisionBridgeDecision === "not-combo" ||
+          comboVisionBridgeDecision === "no-vision" ||
+          isAuto) &&
         !forceVisionBridge);
     // Forced modes short-circuit BEFORE the auto heuristic (#6640/#7204 untouched):
     // - "describe" skips the whole reroute block → straight to the describe path.
     // - "reroute" skips only the keep-credentialed-model guard; the reroute-target
-    //   credential guard still applies, and with no usable target it falls through
-    //   to describe (raw images must never reach a text-only backend — #8430).
+    //   credential guard still applies, and with no usable target the request is
+    //   blocked below instead of described (raw images must never reach a
+    //   text-only backend — #8430).
     if (rerouteEligible && runtime.mode !== "describe") {
       const checkCreds = this.deps.hasUsableCredentials ?? hasUsableCredentialsForModel;
       const originalUsable = runtime.mode === "reroute" ? false : await checkCreds(model);
@@ -363,6 +528,13 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
               ...(rerouteBody as Record<string, unknown>),
               model: bestModel,
             };
+            // #14003: a whole-request reroute answers from a DIFFERENT model
+            // than the one the client named, so it must stay visible in the log
+            // even when it succeeds. The report was that it happened silently.
+            context.log?.warn?.(
+              "VISION_BRIDGE",
+              `Whole-request vision reroute ${model} -> ${bestModel} for ${detectedImageCount} image(s)`
+            );
             return {
               block: false,
               modifiedPayload: modifiedBody as unknown,
@@ -370,13 +542,29 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
                 rerouted: true,
                 fromModel: model,
                 toModel: bestModel,
-                imagesKept: imageParts.length,
+                imagesKept: detectedImageCount,
               },
             };
           }
         }
       }
       // Fall through: describe images as text (or no-op if describe path can't run)
+    }
+
+    // Reroute mode is a lossless policy: a request with an image must reach a
+    // usable vision-capable model. Falling through to description would violate
+    // that contract, especially for nested tool-output images that description
+    // mode cannot splice back into the Responses payload.
+    if (runtime.mode === "reroute") {
+      return {
+        block: true,
+        message: "No usable vision-capable model is available for this image request",
+        meta: {
+          imagesDetected: detectedImageCount,
+          rerouteFailed: true,
+          requestedModel: model,
+        },
+      };
     }
 
     // 10. Get configuration — fed from the resolved runtime values so the new
@@ -419,12 +607,25 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // callVisionModel may fall back internally to another vision model, and
     // keying by attempt would fragment the cache and leak router state into the
     // key. Intentional and stable — do not "fix" this to key per attempt.
+    //
+    // The prompt component is the BASE prompt (`config.prompt`), deliberately
+    // NOT the task-aware composed prompt (`composedPrompt`): the composed
+    // prompt appends the LAST user text, which changes on every conversation
+    // turn. Zoo Code / Claude Code clients resend the FULL transcript each
+    // turn, so a text-only follow-up still carries the turn-1 image in the
+    // history — the bridge re-enters the describe path — but if the key
+    // changed with each new turn it would miss the cache and re-call the
+    // vision model (e.g. mimo-v2.5) for byte-identical images. Keying on the
+    // stable base prompt makes an unchanged history image reuse the cached
+    // description; a genuinely NEW image has a different contentRef and still
+    // misses. The task-aware prompt is what the vision model actually receives
+    // on the first describe, so no description quality is lost.
     const cache = runtime.cacheEnabled ? getSharedBridgeCacheFor(runtime) : null;
 
     // Process all images in parallel using Promise.allSettled for fail-partial behavior
     const results = await Promise.allSettled(
       limitedParts.map(async (imagePart, i) => {
-        const key = cache ? bridgeCacheKey(imagePart.imageUrl, composedPrompt, config.model) : null;
+        const key = cache ? bridgeCacheKey(imagePart.imageUrl, config.prompt, config.model) : null;
         const cached = key && cache ? cache.get(key) : undefined;
         const description = cached ?? (await callVision(imagePart.imageUrl, describeConfig));
         if (cached === undefined && key && cache) cache.set(key, description);

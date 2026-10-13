@@ -6,7 +6,7 @@
  */
 
 export interface PromptQlModel {
-  /** Client-facing id (model_reference slug, e.g. gemini-3.5-flash). */
+  /** Client-facing id (model_reference slug, e.g. gemini-3.7-flash). */
   id: string;
   /** Friendly picker label. */
   name: string;

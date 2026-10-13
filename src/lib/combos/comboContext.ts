@@ -11,7 +11,7 @@
 
 import { resolveNestedComboTargets } from "@omniroute/open-sse/services/combo";
 import { getCanonicalModelMetadata } from "@/lib/modelMetadataRegistry";
-import { getTokenLimit } from "@omniroute/open-sse/services/contextManager";
+import { getSourcedTokenLimit } from "@omniroute/open-sse/services/contextManager";
 import { buildAliasMaps, getComboTargetModelId } from "@/app/api/v1/models/catalogProviderMaps";
 
 /* ─── helpers ───────────────────────────────────────────────── */
@@ -96,10 +96,7 @@ export function computeComboContextLength(
     const providerId = canonicalMeta.provider || resolvedTarget.providerId;
     const modelId = canonicalMeta.model || resolvedTarget.modelId;
 
-    const targetCtx =
-      (isPositiveFiniteNumber(canonicalMeta.limits.contextWindow)
-        ? canonicalMeta.limits.contextWindow
-        : undefined) ?? getTokenLimit(providerId, modelId);
+    const targetCtx = getSourcedTokenLimit(providerId, modelId, canonicalMeta.limits.contextWindow);
 
     if (isPositiveFiniteNumber(targetCtx)) {
       contextValues.push(targetCtx);

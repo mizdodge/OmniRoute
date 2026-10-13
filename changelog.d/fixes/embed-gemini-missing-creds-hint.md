@@ -1,1 +1,0 @@
-- **fix(api):** `/v1/embeddings` 400s for native `gemini-embedding-2` now name the working OpenRouter ids (`openrouter/google/gemini-embedding-2` and the preview alias) instead of only `No credentials for embedding provider: gemini` — thanks @RaviTharuma

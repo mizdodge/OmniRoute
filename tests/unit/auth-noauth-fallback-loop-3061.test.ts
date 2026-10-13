@@ -31,7 +31,7 @@ const { getProviderCredentials } = await import("../../src/sse/services/auth.ts"
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 // ── Happy path preserved: first selection (nothing excluded) still works ──
@@ -73,4 +73,3 @@ test("#3061 opencode-zen no-auth: excluding 'noauth' returns null (breaks the fa
     "excluded synthetic noauth must not be re-selected for the opencode-zen keyless path"
   );
 });
-

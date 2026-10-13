@@ -12,6 +12,7 @@ import {
 import {
   persistOAuthConnection,
   buildOAuthConnectionCreatePayload,
+  buildOAuthTokenUpdate,
   findExistingOAuthConnectionMatch,
 } from "@/lib/oauth/connectionPersistence";
 import { createDeviceFlowTicket, getDeviceFlowTicketStatus } from "@/lib/oauth/deviceFlowTickets";
@@ -24,6 +25,11 @@ import {
 } from "@/models";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { isValidGheUrl } from "@/shared/validation/providerSpecificData";
+import { AWS_REGION_PATTERN } from "@/lib/oauth/constants/oauth";
+import {
+  antigravityDegradedProjectState,
+  antigravityPersistStatus,
+} from "@/lib/oauth/antigravityProjectGate";
 import { syncToCloud } from "@/lib/cloudSync";
 import { startLocalServer } from "@/lib/oauth/utils/server";
 import { runWithProxyContextOrDirect } from "@omniroute/open-sse/utils/proxyFetch.ts";
@@ -35,7 +41,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetupMessage";
 import { keychainImportOnlyGuard } from "./keychainImportOnly";
@@ -62,8 +68,11 @@ const NO_PKCE_DEVICE_CODE_PROVIDERS = new Set([
   "kimi-coding",
   "kilocode",
   "codebuddy-cn",
+  "codebuddy-intl",
+  "workbuddy",
   "grok-cli",
   "ghe-copilot",
+  "muse-code",
 ]);
 
 /**
@@ -75,7 +84,20 @@ const NO_PKCE_DEVICE_CODE_PROVIDERS = new Set([
 const RETIRED_PKCE_PROVIDERS = new Set(["devin-desktop", "devin-cli"]);
 
 /** Providers that allow direct import of a raw API token (no OAuth exchange). */
-const IMPORT_TOKEN_PROVIDERS = new Set(["devin-desktop", "devin-cli", "grok-cli"]);
+const IMPORT_TOKEN_PROVIDERS = new Set(["devin-desktop", "devin-cli", "grok-cli", "claude"]);
+
+/**
+ * #10143: re-importing a token onto an existing connection must keep its persisted
+ * device identity, or the account presents to the upstream as a new device.
+ */
+function keepDeviceIdentity<T extends { providerSpecificData?: Record<string, unknown> }>(
+  tokenData: T,
+  existing: { providerSpecificData?: Record<string, unknown> | null } | undefined
+): T {
+  const cliUserID = existing?.providerSpecificData?.cliUserID;
+  if (typeof cliUserID !== "string" || !tokenData.providerSpecificData) return tokenData;
+  return { ...tokenData, providerSpecificData: { ...tokenData.providerSpecificData, cliUserID } };
+}
 
 /**
  * Constant-time string comparison to prevent timing-oracle attacks (CWE-208).
@@ -103,10 +125,12 @@ function resolvePublicBaseUrl(request: Request): string {
   return new URL(request.url).origin;
 }
 
+// /api/oauth/ is a PUBLIC prefix, so the pipeline leaves auth to this handler, and on a
+// PUBLIC path isAuthenticated() takes any valid client API key. These actions start logins
+// and create or overwrite provider connections, so they need the same management credential
+// as the other connection routes (the import routes next to this one already do).
 async function requireOAuthRouteAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return requireManagementAuth(request, { invalidApiKeyStatus: 401 });
 }
 
 /**
@@ -221,6 +245,16 @@ export async function GET(
             (requestDeviceCode as any)(provider, null, providerOverrideConfig)
           );
         } else if ((provider === "kiro" || provider === "amazon-q") && startUrl) {
+          // GHSA-7x63: `region` is interpolated into the AWS OIDC endpoint URLs
+          // below, which requestDeviceCode() then fetches. Validate it against the
+          // canonical AWS region shape before it can steer the outbound host to an
+          // attacker-chosen target (userinfo/fragment tricks → SSRF / metadata).
+          if (!AWS_REGION_PATTERN.test(region)) {
+            return NextResponse.json(
+              { error: "region must be a valid AWS region (e.g. us-east-1)" },
+              { status: 400 }
+            );
+          }
           const providerOverrideConfig = {
             ...providerData.config,
             startUrl,
@@ -509,6 +543,12 @@ export async function POST(
         exchangeTokens(provider, code, redirectUri, codeVerifier, normalizedState)
       );
 
+      // #11284: when Cloud Code projectId discovery failed at connect time,
+      // SAVE the connection but mark it degraded (maintainer direction on
+      // #11284) — the refresh token stays stored and request-time bootstrap
+      // self-heals the row once Google assigns a project.
+      const degradedProject = antigravityDegradedProjectState(provider, tokenData);
+
       // Normalize: if name is missing, use email or displayName as fallback so accounts
       // always show a real label (e.g. user@gmail.com) instead of "Account #abc123"
       if (!tokenData.name && (tokenData.email || tokenData.displayName)) {
@@ -529,16 +569,15 @@ export async function POST(
         const matchId = typeof match?.id === "string" ? match.id : null;
         if (matchId) {
           connection = await updateProviderConnection(matchId, {
-            ...tokenData,
-            expiresAt,
-            testStatus: "active",
+            ...buildOAuthTokenUpdate(tokenData, expiresAt),
+            ...antigravityPersistStatus(degradedProject),
             isActive: true,
           });
         }
       }
       if (!connection) {
         connection = await createProviderConnection(
-          buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt)
+          buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt, degradedProject)
         );
       }
 
@@ -547,6 +586,7 @@ export async function POST(
 
       return NextResponse.json({
         success: true,
+        ...(degradedProject ? { warning: degradedProject.warning } : {}),
         connection: {
           id: connection.id,
           provider: connection.provider,
@@ -619,8 +659,7 @@ export async function POST(
           const matchId = typeof match?.id === "string" ? match.id : null;
           if (matchId) {
             connection = await updateProviderConnection(matchId, {
-              ...result.tokens,
-              expiresAt,
+              ...buildOAuthTokenUpdate(result.tokens, expiresAt),
               testStatus: "active",
               isActive: true,
             });
@@ -728,6 +767,10 @@ export async function POST(
           exchangeTokens(provider, params.code, redirectUri, codeVerifier, params.state)
         );
 
+        // #11284: when Cloud Code projectId discovery failed at connect time,
+        // SAVE the connection but mark it degraded (maintainer direction).
+        const degradedProject = antigravityDegradedProjectState(provider, tokenData);
+
         // Normalize: if name is missing, use email as fallback display label
         if (!tokenData.name && (tokenData.email || tokenData.displayName)) {
           tokenData.name = tokenData.email || tokenData.displayName;
@@ -752,16 +795,15 @@ export async function POST(
           const matchId = typeof match?.id === "string" ? match.id : null;
           if (matchId) {
             connection = await updateProviderConnection(matchId, {
-              ...tokenData,
-              expiresAt,
-              testStatus: "active",
+              ...buildOAuthTokenUpdate(tokenData, expiresAt),
+              ...antigravityPersistStatus(degradedProject),
               isActive: true,
             });
           }
         }
         if (!connection) {
           connection = await createProviderConnection(
-            buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt)
+            buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt, degradedProject)
           );
         }
 
@@ -769,6 +811,7 @@ export async function POST(
 
         return NextResponse.json({
           success: true,
+          ...(degradedProject ? { warning: degradedProject.warning } : {}),
           connection: {
             id: connection.id,
             provider: connection.provider,
@@ -799,8 +842,11 @@ export async function POST(
 
       try {
         // Map the raw token via the provider's mapTokens() — skips the HTTP exchange entirely.
+        // Providers that must verify the token upstream first expose an async importToken().
         const providerData = getProvider(provider);
-        const tokenData = providerData.mapTokens({ accessToken: token });
+        const tokenData = providerData.importToken
+          ? await providerData.importToken(token)
+          : providerData.mapTokens({ accessToken: token });
 
         // Normalize: if name is missing, use email as fallback display label
         if (!tokenData.name && (tokenData.email || tokenData.displayName)) {
@@ -811,23 +857,24 @@ export async function POST(
           ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
           : null;
 
+        // Tokens without an identity (e.g. a Claude setup-token) match on the token itself,
+        // so re-pasting the same token updates its connection instead of duplicating it.
         let connection: any;
-        if (tokenData.email) {
-          const existing = await getProviderConnections({ provider });
-          const match = existing.find((c: any) => {
-            if (c.id && safeEqual(connectionId, c.id)) return true;
-            if (!safeEqual(c.email, tokenData.email) || c.authType !== "oauth") return false;
-            return true;
+        const existing = await getProviderConnections({ provider });
+        const match = existing.find((c: any) => {
+          if (c.id && safeEqual(connectionId, c.id)) return true;
+          if (c.authType !== "oauth") return false;
+          return tokenData.email
+            ? safeEqual(c.email, tokenData.email)
+            : safeEqual(c.accessToken, tokenData.accessToken);
+        });
+        const matchId = typeof match?.id === "string" ? match.id : null;
+        if (matchId) {
+          connection = await updateProviderConnection(matchId, {
+            ...buildOAuthTokenUpdate(keepDeviceIdentity(tokenData, match), expiresAt),
+            testStatus: "active",
+            isActive: true,
           });
-          const matchId = typeof match?.id === "string" ? match.id : null;
-          if (matchId) {
-            connection = await updateProviderConnection(matchId, {
-              ...tokenData,
-              expiresAt,
-              testStatus: "active",
-              isActive: true,
-            });
-          }
         }
         if (!connection) {
           connection = await createProviderConnection(
@@ -849,7 +896,7 @@ export async function POST(
       } catch (importErr: any) {
         return NextResponse.json(
           { success: false, error: sanitizeErrorMessage(importErr.message) || "Import failed" },
-          { status: 500 }
+          { status: Number.isInteger(importErr?.status) ? importErr.status : 500 }
         );
       }
     }

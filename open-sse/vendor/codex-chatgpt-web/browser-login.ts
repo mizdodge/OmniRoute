@@ -1,39 +1,82 @@
-/* Adapted from miuuyy/codex-chatgpt-web commit 55592fca0ba19a27f1b769cec8fff61ff340a785 (MIT). */
+/* Adapted from miuuyy/codex-chatgpt-web commit 09877fa21ffdbf20979623ef501046fc02a750d7 (MIT). */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { BrowserContextOptions } from "playwright-core";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "playwright-core";
+import { cdpConnectOptions } from "./cdp-auth";
 import type { AppConfig } from "./config";
 import { atomicWriteFile } from "./config";
 import {
   assertAuthenticatedChatGptPage,
   assertTemporaryChatPage,
+  CHATGPT_COMPOSER_SELECTOR,
   CHATGPT_TEMPORARY_CHAT_URL,
-  detectChatGptProCapability,
+  detectChatGptAccountCapabilities,
 } from "./chatgpt-session";
+import type { ChatGptWebAccountCapabilities } from "./chatgpt-web-models";
 
 export interface BrowserLoginResult {
   storageStatePath: string;
   accountSurfaceUrl: string;
+  solAvailable: boolean;
   proAvailable: boolean;
 }
+
+export type BrowserLoginConfig = Pick<
+  AppConfig,
+  "appName" | "storageStatePath" | "headed" | "proAvailable" | "autoApproveToolCalls"
+> & {
+  chromeExecutablePath?: string;
+  cdpEndpoint?: string;
+};
 
 interface LoginVerificationMarker {
   version: 1;
   authenticated: true;
   verifiedAt: string;
+  solAvailable?: boolean;
   proAvailable?: boolean;
   cookieFingerprint?: string;
   storageStateFingerprint?: string;
   pendingBrowserVerification?: boolean;
 }
 
+/**
+ * CDP is explicitly used to attach to an already-running persistent Chrome profile.
+ * Creating a new incognito context after attaching discards that profile's cookies,
+ * local storage, cache, and Cloudflare browser trust — exactly the state CDP is meant
+ * to preserve for this provider.
+ */
+export async function browserContextForStoredState(
+  browser: Browser,
+  storageState: NonNullable<BrowserContextOptions["storageState"]>,
+  reusePersistentCdpContext: boolean
+): Promise<{ context: BrowserContext; owned: boolean }> {
+  if (!reusePersistentCdpContext) {
+    return { context: await browser.newContext({ storageState }), owned: true };
+  }
+  const context = browser.contexts()[0];
+  if (!context) {
+    throw new Error("The CDP Chrome instance did not expose its persistent browser context");
+  }
+  return { context, owned: false };
+}
+
 export function loginVerificationMarkerPath(storageStatePath: string): string {
   return `${storageStatePath}.verified.json`;
 }
 
-export function writeVerificationMarker(storageStatePath: string, proAvailable: boolean): void {
+export function writeVerificationMarker(
+  storageStatePath: string,
+  capabilities: ChatGptWebAccountCapabilities
+): void {
   let previous: Partial<LoginVerificationMarker> = {};
   try {
     previous = JSON.parse(
@@ -53,7 +96,7 @@ export function writeVerificationMarker(storageStatePath: string, proAvailable: 
     version: 1,
     authenticated: true,
     verifiedAt: new Date().toISOString(),
-    proAvailable,
+    ...capabilities,
     ...(previous.cookieFingerprint ? { cookieFingerprint: previous.cookieFingerprint } : {}),
     ...(storageStateFingerprint ? { storageStateFingerprint } : {}),
     pendingBrowserVerification: false,
@@ -62,40 +105,44 @@ export function writeVerificationMarker(storageStatePath: string, proAvailable: 
 }
 
 async function inspectStoredState(
-  config: AppConfig,
+  config: BrowserLoginConfig,
   storageState: NonNullable<BrowserContextOptions["storageState"]>
-): Promise<{ proAvailable: boolean; url: string }> {
-  const { chromium } = await import("playwright-core");
+): Promise<ChatGptWebAccountCapabilities & { url: string }> {
   if (!config.cdpEndpoint && !config.chromeExecutablePath) {
-    throw new Error("ChatGPT browser runtime is not configured");
+    throw new Error("ChatGPT browser verification requires Chrome or a CDP endpoint");
   }
   const verifierBrowser = config.cdpEndpoint
-    ? await chromium.connectOverCDP(config.cdpEndpoint)
+    ? await chromium.connectOverCDP(config.cdpEndpoint, cdpConnectOptions())
     : await chromium.launch({
         executablePath: config.chromeExecutablePath,
-        headless: !config.headed,
+        headless: false,
         ignoreDefaultArgs: ["--password-store=basic", "--use-mock-keychain"],
         args: ["--no-first-run", "--no-default-browser-check"],
       });
   try {
-    const verifierContext = await verifierBrowser.newContext({ storageState });
+    const { context: verifierContext, owned: ownsVerifierContext } =
+      await browserContextForStoredState(
+        verifierBrowser,
+        storageState,
+        Boolean(config.cdpEndpoint)
+      );
+    let verifierPage: Page | undefined;
     try {
-      const verifierPage = await verifierContext.newPage();
+      verifierPage = await verifierContext.newPage();
       await verifierPage.goto(CHATGPT_TEMPORARY_CHAT_URL, {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
       await verifierPage
-        .getByRole("textbox", { name: "Chat with ChatGPT" })
+        .locator(CHATGPT_COMPOSER_SELECTOR)
+        .first()
         .waitFor({ state: "visible", timeout: 60_000 });
       await assertAuthenticatedChatGptPage(verifierPage);
       await assertTemporaryChatPage(verifierPage);
-      return {
-        proAvailable: await detectChatGptProCapability(verifierPage),
-        url: verifierPage.url(),
-      };
+      return { ...(await detectChatGptAccountCapabilities(verifierPage)), url: verifierPage.url() };
     } finally {
-      await verifierContext.close();
+      if (ownsVerifierContext) await verifierContext.close();
+      else await verifierPage?.close().catch(() => {});
     }
   } finally {
     await verifierBrowser.close();
@@ -103,8 +150,8 @@ async function inspectStoredState(
 }
 
 export async function inspectBrowserLoginCapabilities(
-  config: AppConfig
-): Promise<{ proAvailable: boolean }> {
+  config: BrowserLoginConfig
+): Promise<ChatGptWebAccountCapabilities> {
   if (
     !existsSync(config.storageStatePath) ||
     !existsSync(loginVerificationMarkerPath(config.storageStatePath))
@@ -112,17 +159,22 @@ export async function inspectBrowserLoginCapabilities(
     throw new Error("ChatGPT login state is missing");
   }
   const inspected = await inspectStoredState(config, config.storageStatePath);
-  writeVerificationMarker(config.storageStatePath, inspected.proAvailable);
-  return { proAvailable: inspected.proAvailable };
+  writeVerificationMarker(config.storageStatePath, inspected);
+  return { solAvailable: inspected.solAvailable, proAvailable: inspected.proAvailable };
 }
 
-export function storedBrowserLoginCapabilities(config: AppConfig): { proAvailable?: boolean } {
+export function storedBrowserLoginCapabilities(
+  config: BrowserLoginConfig
+): Partial<ChatGptWebAccountCapabilities> {
   if (!browserLoginStateExists(config)) return {};
   try {
     const marker = JSON.parse(
       readFileSync(loginVerificationMarkerPath(config.storageStatePath), "utf8")
     ) as Partial<LoginVerificationMarker>;
-    return typeof marker.proAvailable === "boolean" ? { proAvailable: marker.proAvailable } : {};
+    return {
+      ...(typeof marker.solAvailable === "boolean" ? { solAvailable: marker.solAvailable } : {}),
+      ...(typeof marker.proAvailable === "boolean" ? { proAvailable: marker.proAvailable } : {}),
+    };
   } catch {
     return {};
   }
@@ -132,8 +184,7 @@ export async function loginToChatGpt(
   config: AppConfig,
   options: { timeoutMs?: number } = {}
 ): Promise<BrowserLoginResult> {
-  const { chromium } = await import("playwright-core");
-  if (!config.chromeExecutablePath || !existsSync(config.chromeExecutablePath)) {
+  if (!existsSync(config.chromeExecutablePath)) {
     throw new Error(
       `Google Chrome was not found at ${config.chromeExecutablePath}. Pass --chrome with its executable path.`
     );
@@ -177,14 +228,7 @@ export async function loginToChatGpt(
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
-    const composer = page
-      .getByRole("textbox", { name: "Chat with ChatGPT" })
-      .or(
-        page.locator(
-          '[data-testid="prompt-textarea"], [contenteditable="true"][data-lexical-editor="true"]'
-        )
-      )
-      .first();
+    const composer = page.locator(CHATGPT_COMPOSER_SELECTOR).first();
     try {
       await composer.waitFor({ state: "visible", timeout: options.timeoutMs ?? 60_000 });
     } catch {
@@ -196,10 +240,11 @@ export async function loginToChatGpt(
 
     const inspected = await inspectStoredState(config, state);
     atomicWriteFile(config.storageStatePath, `${JSON.stringify(state)}\n`);
-    writeVerificationMarker(config.storageStatePath, inspected.proAvailable);
+    writeVerificationMarker(config.storageStatePath, inspected);
     return {
       storageStatePath: config.storageStatePath,
       accountSurfaceUrl: page.url(),
+      solAvailable: inspected.solAvailable,
       proAvailable: inspected.proAvailable,
     };
   } finally {
@@ -208,7 +253,9 @@ export async function loginToChatGpt(
   }
 }
 
-export function browserLoginStateExists(config: AppConfig): boolean {
+export function browserLoginStateExists(
+  config: Pick<BrowserLoginConfig, "storageStatePath">
+): boolean {
   if (!existsSync(config.storageStatePath)) return false;
   const markerPath = loginVerificationMarkerPath(config.storageStatePath);
   if (!existsSync(markerPath)) return false;
@@ -226,13 +273,7 @@ export function browserLoginStateExists(config: AppConfig): boolean {
 }
 
 export async function checkBrowserEngine(config: AppConfig): Promise<void> {
-  const { chromium } = await import("playwright-core");
-  if (config.cdpEndpoint) {
-    const browser = await chromium.connectOverCDP(config.cdpEndpoint);
-    await browser.close();
-    return;
-  }
-  if (!config.chromeExecutablePath || !existsSync(config.chromeExecutablePath))
+  if (!existsSync(config.chromeExecutablePath))
     throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}`);
   const browser = await chromium.launch({
     executablePath: config.chromeExecutablePath,

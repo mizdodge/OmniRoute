@@ -78,7 +78,11 @@ test("Antigravity missing-project 422 stays fail-closed without account cooldown
   assert.equal(payload.error?.code, "missing_project_id");
   assert.equal(payload.error?.type, "oauth_missing_project_id");
   assert.equal(bootstrapCalls, 1);
-  assert.equal(persisted?.testStatus, "active");
+  // #11284: a CONFIRMED missing project disables the account (recoverable,
+  // not terminal) so selection rotates to healthy siblings — and
+  // persistDiscoveredAntigravityProjectId re-enables it on recovery.
+  assert.equal(persisted?.isActive, false);
+  assert.equal(persisted?.testStatus, "unavailable");
   assert.equal(persisted?.rateLimitedUntil, undefined);
   assert.equal(persisted?.errorCode, "missing_project_id");
   assert.equal(persisted?.lastErrorType, "oauth_missing_project_id");

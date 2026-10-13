@@ -1,1 +1,0 @@
-- **fix(test):** remove live `npm pack` from MCP files unit test (it stalled concurrent `test:unit` via prepare→husky + monorepo pack walk); keep the static #3578 `files` allowlist + negation guards in unit and fold #3821 pack assertions into `check:pack-artifact` / `check:pack-policy` (already `--ignore-scripts`).

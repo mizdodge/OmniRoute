@@ -1,1 +1,0 @@
-- fix(sse): downgrade client-supplied `thinking:{type:"adaptive"}` to `enabled` and gate the `context-1m-2025-08-07` beta on model eligibility when a combo/fallback re-routes a request to a non-adaptive/non-1M model like claude-haiku-4-5 (avoids "adaptive thinking is not supported on this model" and "long context beta is not yet available" 400s, #10119)
