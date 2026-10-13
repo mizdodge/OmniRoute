@@ -58,7 +58,7 @@ jobs:
           import json
           Path('/tmp/sync-payload.json').write_text(json.dumps({"body":s}))
           PY
-          gh api --method POST repos/mizdodge/OmniRoute/issues/2 --input /tmp/sync-payload.json >/dev/null || true
+          gh api --method POST repos/mizdodge/OmniRoute/issues/2/comments --input /tmp/sync-payload.json >/dev/null || true
           cat /tmp/sync-summary.txt >> "$GITHUB_STEP_SUMMARY"
           git merge --abort 2>/dev/null || true
           exit 0
